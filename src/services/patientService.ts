@@ -1,0 +1,1558 @@
+import { supabase } from '@/lib/supabase/client';
+import type { Patient, Note, LicenseSubmission, EnhancedLicenseSubmission, SubmissionStats, MonthlyTrendItem, TypedSubmissionStats, MarketingSendLog, MonthlyLocationBreakdown, DashboardExpirationCardStats, ExpirationDataPoint } from '@/types';
+import { differenceInDays, parseISO, isValid, format, startOfMonth, endOfMonth, subMonths, getMonth, getYear, isWithinInterval, startOfToday, addMonths, addDays, subYears } from 'date-fns';
+
+// MIGRATED: Helper function to transform a customer row to Patient type
+function transformSupabaseRowToPatient(rowData: any): Patient | null {
+  // Enhanced validation with detailed logging
+  if (!rowData) {
+    console.error('[patientService] Received null/undefined rowData');
+    return null;
+  }
+  
+  // Convert customerid to number if needed
+  let customerId = rowData.customerid;
+  if (typeof customerId === 'string') {
+    customerId = parseInt(customerId, 10);
+  }
+  
+  if (!customerId || isNaN(customerId) || typeof customerId !== 'number') {
+    console.error('[patientService] Invalid customerid after conversion:', {
+      original: rowData.customerid,
+      converted: customerId,
+      type: typeof customerId
+    });
+    return null;
+  }
+
+  // CALCULATE license_exp_date from licenseexpyear and licenseexpmonth
+  let rawExpirationDate = '';
+  let days_to_expiration = -9999; // Default for invalid/missing dates
+
+  if (rowData.licenseexpyear && rowData.licenseexpmonth) {
+    try {
+      const year = parseInt(rowData.licenseexpyear.toString());
+      const month = parseInt(rowData.licenseexpmonth.toString());
+      if (year > 1900 && month >= 1 && month <= 12) {
+        // Create date as last day of expiration month
+        const expirationDate = new Date(year, month - 1, 1);
+        expirationDate.setMonth(expirationDate.getMonth() + 1);
+        expirationDate.setDate(expirationDate.getDate() - 1);
+        rawExpirationDate = format(expirationDate, 'yyyy-MM-dd');
+        days_to_expiration = differenceInDays(expirationDate, startOfToday());
+      }
+    } catch (error) {
+      console.warn('[patientService] Error calculating license expiration date:', error);
+    }
+  }
+
+  // Calculate birthdate and customer_since from customers table
+  let birthDate = '';
+  if (rowData.birthyear && rowData.birthmonth && rowData.birthday) {
+    try {
+      const year = parseInt(rowData.birthyear.toString());
+      const month = parseInt(rowData.birthmonth.toString());
+      const day = parseInt(rowData.birthday.toString());
+      if (year > 1900 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        birthDate = format(new Date(year, month - 1, day), 'yyyy-MM-dd');
+      }
+    } catch (error) {
+      console.warn('[patientService] Error calculating birth date:', error);
+    }
+  }
+
+  const customerSinceDate = rowData.createdate || '';
+  const memberStatus = rowData.ismember ? 'Member' : 'Non-Member';
+
+  const patient: Patient = {
+    id: customerId, // Use the converted customerid
+    days_to_expiration: days_to_expiration,
+    lastname: (rowData.lastname || '').toString(),
+    firstname: (rowData.firstname || '').toString(),
+    middlename: rowData.middlename ? rowData.middlename.toString() : undefined,
+    mmj_card: (rowData.licensenum || '').toString(),
+    mmj_card_expiration: rawExpirationDate,
+    birthdate: birthDate,
+    address1: (rowData.address1 || '').toString(),
+    city: (rowData.city || '').toString(),
+    state: (rowData.state || '').toString(),
+    zip: (rowData.zip || '').toString(),
+    member_status: memberStatus as 'Member' | 'Non-Member' | 'VIP',
+    email: (rowData.email || '').toString(),
+    cell: (rowData.cell || rowData.phone || '').toString(), // Use cell or phone
+    emailoptin: true, // Default - customers table doesn't have this
+    smsoptin: true, // Default - customers table doesn't have this
+    drivers_license: undefined, // Not in customers table
+    license_expiration: undefined, // Not in customers table
+    dispensary_name: (rowData.locationName || `Location ${rowData.location}` || 'Unknown Location').toString(),
+    customer_since: customerSinceDate,
+    member_since: rowData.createdate ? rowData.createdate.toString() : undefined,
+    number_of_visits: 0, // Default - not in customers table
+    spent_to_date: 0, // Default - not in customers table
+    last_communication_type: undefined,
+    last_communication_date: undefined,
+    renewal_status: undefined,
+    license_photo_url: undefined,
+    email_marketing_status: undefined,
+  };
+
+  return patient;
+}
+
+// MIGRATED: Updated fetchPatients function to use customers table
+export async function fetchPatients(options = {}) {
+  const { 
+    limit = null, // null means no limit
+    offset = 0,
+    searchTerm = null,
+    expirationFilter = null,
+    locationFilter = null
+  } = options;
+
+  let query = supabase
+    .from('customers')
+    .select(`
+      customerid, lastname, firstname, middlename,
+      birthmonth, birthday, birthyear,
+      phone, email, cell, address1, address2, city, state, zip,
+      licensenum, licenseexpmonth, licenseexpyear,
+      createdate, modified_on_bt, deleted, location, ismember
+    `, { count: 'exact' }) // Get total count with specific fields
+    .eq('deleted', 0) // Only non-deleted customers
+    .not('customerid', 'is', null) // Filter out null customerids
+    .not('customerid', 'eq', '') // Filter out empty customerids
+    .order('lastname', { ascending: true })
+    .order('firstname', { ascending: true });
+
+  // Apply search filter if provided
+  if (searchTerm) {
+    const term = searchTerm.toLowerCase();
+    query = query.or(`firstname.ilike.%${term}%,lastname.ilike.%${term}%,email.ilike.%${term}%,licensenum.ilike.%${term}%,cell.ilike.%${term}%,phone.ilike.%${term}%`);
+  }
+
+  // Apply expiration filter if provided - using calculated dates from licenseexpyear/month
+  if (expirationFilter) {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth() + 1;
+    
+    switch (expirationFilter) {
+      case '30days':
+        const in30Days = addDays(today, 30);
+        const target30Year = in30Days.getFullYear();
+        const target30Month = in30Days.getMonth() + 1;
+        query = query.gte('licenseexpyear', currentYear.toString())
+                    .gte('licenseexpmonth', currentMonth.toString())
+                    .lte('licenseexpyear', target30Year.toString())
+                    .lte('licenseexpmonth', target30Month.toString());
+        break;
+      case '60days':
+        const in60Days = addDays(today, 60);
+        const target60Year = in60Days.getFullYear();
+        const target60Month = in60Days.getMonth() + 1;
+        query = query.gte('licenseexpyear', currentYear.toString())
+                    .gte('licenseexpmonth', currentMonth.toString())
+                    .lte('licenseexpyear', target60Year.toString())
+                    .lte('licenseexpmonth', target60Month.toString());
+        break;
+      case '90days':
+        const in90Days = addDays(today, 90);
+        const target90Year = in90Days.getFullYear();
+        const target90Month = in90Days.getMonth() + 1;
+        query = query.gte('licenseexpyear', currentYear.toString())
+                    .gte('licenseexpmonth', currentMonth.toString())
+                    .lte('licenseexpyear', target90Year.toString())
+                    .lte('licenseexpmonth', target90Month.toString());
+        break;
+      case 'expired':
+        query = query.or(`licenseexpyear.lt.${currentYear},and(licenseexpyear.eq.${currentYear},licenseexpmonth.lt.${currentMonth})`);
+        break;
+    }
+  }
+
+  // Apply location filter if provided
+  if (locationFilter) {
+    // First get the location ID from the location name
+    const { data: locationData } = await supabase
+      .from('locations')
+      .select('id')
+      .eq('name', locationFilter)
+      .single();
+    
+    if (locationData?.id) {
+      query = query.eq('location', locationData.id);
+    }
+  }
+
+  // Apply pagination if limit is specified
+  if (limit) {
+    query = query.range(offset, offset + limit - 1);
+  }
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    console.error("[patientService] Error fetching customers from Supabase: ", error);
+    throw new Error("Failed to fetch customers from database.");
+  }
+
+  if (!data) {
+    console.log("[patientService] fetchPatients: No data returned from Supabase for customers query.");
+    return { patients: [], totalCount: 0 };
+  }
+
+  console.log(`[patientService] fetchPatients: Fetched ${data.length} customers out of ${count} total.`);
+
+  // Add debug logging for problematic records
+  const validData = data.filter(row => {
+    if (!row) {
+      console.warn(`[patientService] Row is null/undefined`);
+      return false;
+    }
+    
+    // Try to convert customerid to number if it's a string
+    let customerId = row.customerid;
+    if (typeof customerId === 'string') {
+      customerId = parseInt(customerId, 10);
+    }
+    
+    if (!customerId || isNaN(customerId)) {
+      console.warn(`[patientService] Invalid customerid:`, {
+        original: row.customerid,
+        originalType: typeof row.customerid,
+        converted: customerId,
+        convertedType: typeof customerId,
+        isNaN: isNaN(customerId),
+        rowSample: {
+          firstname: row.firstname,
+          lastname: row.lastname,
+          licensenum: row.licensenum,
+          allKeys: Object.keys(row)
+        }
+      });
+      return false;
+    }
+    
+    // Update the row with converted customerid
+    row.customerid = customerId;
+    return true;
+  });
+
+  console.log(`[patientService] After filtering: ${validData.length} valid customers out of ${data.length} fetched.`);
+  
+  // Show sample of what we got
+  if (data.length > 0) {
+    console.log(`[patientService] Sample raw data from Supabase:`, data[0]);
+  }
+  if (validData.length > 0) {
+    console.log(`[patientService] Sample valid data:`, validData[0]);
+  }
+
+  // Get location names for the customers
+  const locationIds = [...new Set(validData.map(row => row.location).filter(id => id))];
+  
+  if (locationIds.length === 0) {
+    console.log('[patientService] No location IDs found in customer data');
+    const transformedPatients = validData
+      .map(row => ({
+        ...row,
+        locationName: 'Unknown Location'
+      }))
+      .map(row => transformSupabaseRowToPatient(row))
+      .filter(patient => patient !== null) as Patient[];
+    
+    return { 
+      patients: transformedPatients, 
+      totalCount: count || 0 
+    };
+  }
+  
+  console.log('[patientService] Looking up location names for IDs:', locationIds);
+  
+  const { data: locationsData, error: locationsError } = await supabase
+    .from('locations')
+    .select('id, name')
+    .in('id', locationIds);
+  
+  if (locationsError) {
+    console.error('[patientService] Error fetching location names:', locationsError);
+  }
+  
+  // Create location lookup map
+  const locationMap = new Map();
+  if (locationsData) {
+    locationsData.forEach(loc => {
+      locationMap.set(loc.id, loc.name);
+    });
+  }
+
+  // Add location names to customer data
+  const customersWithLocations = validData.map(customer => ({
+    ...customer,
+    locationName: locationMap.get(customer.location) || `Location ${customer.location}` || 'Unknown Location'
+  }));
+
+  const transformedPatients = customersWithLocations
+    .map(row => transformSupabaseRowToPatient(row))
+    .filter(patient => patient !== null) as Patient[];
+
+  return { 
+    patients: transformedPatients, 
+    totalCount: count || 0 
+  };
+}
+
+export async function fetchPatientById(id: number): Promise<Patient | null> {
+  if (isNaN(id)) {
+     console.error("[patientService] Invalid customer ID provided to fetchPatientById:", id);
+     return null;
+  }
+  const { data, error } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('customerid', id) // Changed from 'id' to 'customerid'
+    .eq('deleted', 0) // Only non-deleted customers
+    .limit(1)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116' && error.message.includes('0 rows')) { // PGRST116: "The result contains 0 rows"
+        return null;
+    }
+    console.error(`[patientService] Error fetching customer with id ${id} from Supabase: `, error);
+    throw new Error(`Failed to fetch customer with id ${id} from database.`);
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  return transformSupabaseRowToPatient(data);
+}
+
+export async function fetchNotesByPatientId(patientId: number): Promise<Note[]> {
+  if (isNaN(patientId)) {
+    console.error("[patientService] Invalid patient ID provided to fetchNotesByPatientId:", patientId);
+    return [];
+  }
+  const { data, error } = await supabase
+    .from('patient_notes')
+    .select('*')
+    .eq('patient_id', patientId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error(`[patientService] Error fetching notes for patient ${patientId}:`, error);
+    throw new Error('Failed to fetch patient notes.');
+  }
+  return (data || []).map(note => ({
+    ...note,
+    id: note.id.toString(), 
+    created_at: note.created_at 
+  })) as Note[];
+}
+
+export async function fetchAllPatientNotes(): Promise<Note[]> {
+  const { data, error } = await supabase
+    .from('patient_notes')
+    .select(`
+      *,
+      customer:customers!patient_id(
+        customerid,
+        firstname,
+        lastname
+      ),
+      user:users(
+        displayName
+      )
+    `)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('[patientService] Error fetching all patient notes:', error);
+    throw new Error('Failed to fetch all patient notes.');
+  }
+
+  return (data || []).map(note => ({
+    ...note,
+    id: note.id.toString(),
+    created_at: note.created_at,
+  })) as Note[];
+}
+
+export async function addPatientNote(patientId: number, noteContent: string, createdByUserId?: string): Promise<Note> {
+  if (isNaN(patientId) || !noteContent.trim()) {
+    throw new Error('Invalid input for adding patient note.');
+  }
+  const noteData: any = {
+    patient_id: patientId,
+    note_content: noteContent,
+    // Include created_by_user_id if provided
+    ...(createdByUserId && { created_by_user_id: createdByUserId }),
+  };
+
+  const { data, error } = await supabase
+    .from('patient_notes')
+    .insert([noteData])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('[patientService] Error adding patient note:', error);
+    throw new Error('Failed to add patient note.');
+  }
+  return {
+      ...data,
+      id: data.id.toString(),
+      created_at: data.created_at
+  } as Note;
+}
+
+export async function uploadLicensePhoto(patientId: number, file: File): Promise<string> {
+  const fileName = `patient_licenses/${patientId}/${Date.now()}_${file.name.replace(/\s+/g, '_')}`;
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from('license-photos') 
+    .upload(fileName, file, {
+        cacheControl: '3600',
+        upsert: true 
+    });
+
+  if (uploadError) {
+    console.error('[patientService] Error uploading license photo to Supabase Storage:', uploadError);
+    throw new Error(`Failed to upload license photo: ${uploadError.message}`);
+  }
+
+  const { data: publicUrlData } = supabase.storage
+    .from('license-photos') 
+    .getPublicUrl(uploadData.path);
+
+  if (!publicUrlData?.publicUrl) {
+    console.error('[patientService] Could not get public URL for uploaded license photo.');
+    try {
+      await supabase.storage.from('license-photos').remove([uploadData.path]);
+    } catch (removeError) {
+      console.error('[patientService] Failed to remove orphaned license photo from storage:', removeError);
+    }
+    throw new Error('Failed to get public URL for license photo.');
+  }
+
+  return publicUrlData.publicUrl;
+}
+
+export async function fetchUniqueDispensaryNames(): Promise<string[]> {
+  console.log('[patientService] Fetching unique location names from locations table...');
+
+  const { data, error } = await supabase
+    .from('locations')
+    .select('name')
+    .order('name');
+
+  if (error) {
+    console.error('[patientService] Error fetching unique location names:', error);
+    // Return a default list or empty array in case of error
+    return []; 
+  }
+
+  if (!data) {
+    console.warn("[patientService] fetchUniqueDispensaryNames: No data returned from Supabase.");
+    return [];
+  }
+
+  const uniqueNames = Array.from(new Set(data
+    .map(row => row.name)
+    .filter((name): name is string => typeof name === 'string' && name.trim() !== ''))); // Filter out null, undefined, and empty strings
+
+  console.log('[patientService] Found dispensary names:', uniqueNames);
+  return uniqueNames.sort(); // Sort alphabetically
+}
+export async function updatePatientLicensePhotoUrl(patientId: number, photoUrl: string): Promise<void> {
+    // NOTE: This function might need to be updated based on how you want to store license photos
+    // for customers. For now, we'll update the customer record or create a separate table
+    console.warn('[patientService] updatePatientLicensePhotoUrl: This function needs to be updated for customers table');
+    
+    // Option 1: Add license_photo_url column to customers table
+    // Option 2: Create a separate customer_documents table
+    // For now, we'll just log the action
+    console.log(`[patientService] Would update license photo URL for customer ${patientId}: ${photoUrl}`);
+}
+
+// FIXED: Updated fetchSubmissionsForPatient function with proper field mapping
+export async function fetchSubmissionsForPatient(patient: Patient): Promise<LicenseSubmission[]> {
+  if (!patient) return [];
+
+  const orConditions: string[] = [];
+  if (patient.id) orConditions.push(`patient_id.eq.${patient.id}`);
+  if (patient.mmj_card) orConditions.push(`mmj_card_number.eq.${patient.mmj_card}`);
+  if (patient.email && patient.email.trim() !== '') orConditions.push(`email.ilike.%${patient.email.trim()}%`);
+  
+  if (patient.cell && patient.cell.trim() !== '') {
+      const numericCell = patient.cell.replace(/\D/g, '');
+      if (numericCell) {
+          // For numeric phone_number field
+          orConditions.push(`phone_number.eq.${numericCell}`);
+      }
+  }
+
+  if (orConditions.length === 0) {
+    console.warn("[patientService] No valid identifiers to fetch submissions for patient:", patient);
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('license_submissions')
+    .select(`
+      id,
+      submitted_at,
+      submission_type,
+      first_name,
+      last_name,
+      email,
+      phone_number,
+      mmj_card_number,
+      status,
+      processed_at,
+      patient_id,
+      date_of_birth
+    `)
+    .or(orConditions.join(','))
+    .order('submitted_at', { ascending: false });
+
+  if (error) {
+    console.error(`[patientService] Error fetching submissions for patient ${patient.id || patient.email}:`, error);
+    return []; 
+  }
+
+  // Transform to match expected interface - map database fields to expected fields
+  return (data || []).map(sub => ({
+      id: sub.id.toString(),
+      submitted_at: sub.submitted_at,
+      submission_type: sub.submission_type === 'Renewal Medical License' ? 'RENEWAL' : 'NEW',
+      first_name: sub.first_name,
+      last_name: sub.last_name,
+      email: sub.email,
+      phone_number: sub.phone_number?.toString() || '',
+      date_of_birth: sub.date_of_birth,
+      mmj_card_number: sub.mmj_card_number,
+      new_mmj_expiration_date: null, // This field doesn't exist in your DB
+      email_opt_in: true, // Default values since these fields may not exist
+      sms_opt_in: true,
+      status: sub.status || 'UNKNOWN',
+      processed_at: sub.processed_at,
+      patient_id: sub.patient_id || patient.id,
+  })) as LicenseSubmission[];
+}
+
+export async function fetchRecentRenewals(): Promise<Patient[]> {
+  const now = new Date();
+  const startDate = format(startOfMonth(now), "yyyy-MM-dd'T'HH:mm:ss.SSSxxx"); 
+  const endDate = format(endOfMonth(now), "yyyy-MM-dd'T'HH:mm:ss.SSSxxx");     
+
+  const { data: submissionsData, error: submissionsError } = await supabase
+    .from('license_submissions')
+    .select('patient_id')
+    .eq('submission_type', 'Renewal Medical License') // Match exact type
+    .eq('status', 'PROCESSED')                   
+    .gte('processed_at', startDate)               
+    .lte('processed_at', endDate)
+    .not('patient_id', 'is', null);             
+
+  if (submissionsError) {
+    console.error('[patientService] Error fetching recent renewal submissions:', submissionsError);
+    return [];
+  }
+
+  if (!submissionsData || submissionsData.length === 0) {
+    return []; 
+  }
+
+  const customerIds = submissionsData
+    .map(s => s.patient_id)
+    .filter(id => id !== null && id !== undefined && !isNaN(Number(id))) as number[];
+
+  if (customerIds.length === 0) {
+    return [];
+  }
+
+  const { data: customersData, error: customersError } = await supabase
+    .from('customers')
+    .select('*')
+    .in('customerid', customerIds)
+    .eq('deleted', 0);
+
+  if (customersError) {
+    console.error('[patientService] Error fetching customers for recent renewals:', customersError);
+    return [];
+  }
+
+  const transformedPatients = (customersData || [])
+    .map(row => transformSupabaseRowToPatient(row))
+    .filter(p => p !== null) as Patient[];
+  return transformedPatients;
+}
+
+// ENHANCED: Updated fetchEnhancedSubmissions function with better 12-month support
+export async function fetchEnhancedSubmissions(filterStartDate?: Date): Promise<EnhancedLicenseSubmission[]> {
+  console.log(`[patientService] fetchEnhancedSubmissions called with filterStartDate:`, filterStartDate);
+  
+  let query = supabase
+    .from('license_submissions')
+    .select(`
+      id,
+      submitted_at,
+      submission_type,
+      first_name,
+      last_name,
+      middle_name,
+      email,
+      phone_number,
+      date_of_birth,
+      mmj_card_number,
+      address1,
+      city,
+      state,
+      zip_code,
+      dispensary_location,
+      email_opt_in,
+      sms_opt_in,
+      license_photo_url,
+      patient_id,
+      status,
+      processed_at,
+      patient_walkIn_payment,
+      payment,
+      promotion,
+      order_payment_status,
+      order_payment_method,
+      payment_confirmation
+    `)
+    .order('submitted_at', { ascending: false });
+
+  if (filterStartDate) {
+    const isoStartDate = filterStartDate.toISOString();
+    query = query.gte('submitted_at', isoStartDate);
+    console.log(`[patientService] fetchEnhancedSubmissions: Filtering submissions from: ${isoStartDate} (${format(filterStartDate, 'yyyy-MM-dd')})`);
+  } else {
+    console.log("[patientService] fetchEnhancedSubmissions: No date filter applied - fetching all submissions");
+    // Remove the default limit when no date filter is provided to allow "All Time" option
+    // query = query.limit(250); // Commented out to allow unlimited fetching
+  }
+
+  const { data: submissionsData, error: submissionsError } = await query;
+
+  if (submissionsError) {
+    console.error(
+      "[patientService] Supabase error fetching submissions for enhanced view. Raw error object:",
+      JSON.stringify(submissionsError, Object.getOwnPropertyNames(submissionsError), 2)
+    );
+    let detailedMessage = "Failed to fetch submissions from Supabase.";
+    if (submissionsError.message) {
+      detailedMessage += ` Message: ${submissionsError.message}`;
+    }
+    if (submissionsError.details) {
+      detailedMessage += ` Details: ${submissionsError.details}`;
+    }
+    if (submissionsError.hint) {
+      detailedMessage += ` Hint: ${submissionsError.hint}`;
+    }
+    if (submissionsError.code) {
+      detailedMessage += ` Code: ${submissionsError.code}`;
+    }
+    if (Object.keys(submissionsError).length === 0 || (!submissionsError.message && !submissionsError.details)) {
+        detailedMessage += " This might be due to RLS policies, incorrect table/column names, or an issue with the query structure. Please verify your Supabase setup and RLS policies for the 'license_submissions' table.";
+    }
+    throw new Error(detailedMessage);
+  }
+
+  if (!submissionsData) {
+    console.warn("[patientService] No submissions data returned from Supabase for enhanced view (submissionsData is null/undefined), but no explicit error.");
+    return [];
+  }
+  
+  if (submissionsData.length === 0) {
+      console.warn("[patientService] Fetched 0 submissions for enhanced view. Check table data, RLS policies, or if the table is truly empty for the query.");
+      return [];
+  }
+  console.log(`[patientService] Fetched ${submissionsData.length} submissions for enhanced view (filtered from: ${filterStartDate ? format(filterStartDate, 'yyyy-MM-dd') : 'All time'}).`);
+
+  // Fetch customers for matching - use correct field names from customers table
+  const { data: patientsData, error: patientsError } = await supabase
+    .from('customers')
+    .select('customerid, email, cell, licensenum') // Updated to use customers fields
+    .eq('deleted', 0);
+
+  if (patientsError) {
+    console.error("[patientService] Supabase error fetching patients for matching in enhanced submissions:", patientsError);
+  }
+
+  // Create lookup maps for patient matching
+  const patientMapById = new Map<number, { id: number }>();
+  const patientMapByEmail = new Map<string, { id: number }>();
+  const patientMapByPhone = new Map<string, { id: number }>();
+  const patientMapByMmjCard = new Map<string, { id: number }>();
+
+  if (patientsData) {
+    for (const p of patientsData) {
+      if (p.customerid) patientMapById.set(p.customerid, { id: p.customerid });
+      if (p.email) patientMapByEmail.set(p.email.toLowerCase(), { id: p.customerid });
+      if (p.cell) {
+        const numericPhone = p.cell.toString().replace(/\D/g, '');
+        if (numericPhone) patientMapByPhone.set(numericPhone, { id: p.customerid});
+      }
+      if (p.licensenum) patientMapByMmjCard.set(p.licensenum, { id: p.customerid});
+    }
+  }
+
+  // Enhanced submissions with patient matching logic
+  const enhancedSubmissions = submissionsData.map(sub => {
+    let isExistingPatient = false;
+    let matchedPatientId: number | null = null;
+
+    // First check if patient_id is already set and valid
+    if (sub.patient_id) {
+      const numericPatientId = typeof sub.patient_id === 'string' ? parseInt(sub.patient_id, 10) : sub.patient_id;
+      if (!isNaN(numericPatientId) && patientMapById.has(numericPatientId)) {
+        isExistingPatient = true;
+        matchedPatientId = numericPatientId;
+      }
+    }
+
+    // If no direct patient_id match, try other matching methods
+    if (!matchedPatientId) {
+      // Try email matching
+      if (sub.email) {
+        const patientByEmail = patientMapByEmail.get(sub.email.toLowerCase());
+        if (patientByEmail) {
+          isExistingPatient = true;
+          matchedPatientId = patientByEmail.id;
+        }
+      }
+
+      // Try phone matching
+      if (!matchedPatientId && sub.phone_number) { 
+        const normalizedPhone = sub.phone_number.toString().replace(/\D/g, '');
+        if (normalizedPhone) {
+          const patientByPhone = patientMapByPhone.get(normalizedPhone);
+          if (patientByPhone) {
+            isExistingPatient = true;
+            matchedPatientId = patientByPhone.id;
+          }
+        }
+      }
+
+      // Try MMJ card matching
+      if (!matchedPatientId && sub.mmj_card_number) { 
+        const patientByMmj = patientMapByMmjCard.get(sub.mmj_card_number);
+        if (patientByMmj) {
+          isExistingPatient = true;
+          matchedPatientId = patientByMmj.id;
+        }
+      }
+    }
+
+    return {
+      ...sub,
+      id: sub.id.toString(), 
+      isExistingPatient,
+      matchedPatientId: matchedPatientId?.toString() || null, // Convert to string for consistency
+    } as EnhancedLicenseSubmission;
+  });
+
+  return enhancedSubmissions;
+}
+
+// FIXED: Support for flexible date ranges in license submission stats including current month
+const processSubmissionsForType = (
+  submissions: any[],
+  targetType: string,
+  typeLabel: string,
+  monthsLookback: number = 4 // Default to 4 months
+): TypedSubmissionStats => {
+  const typeSubmissions = submissions.filter(
+    (s) => s.submission_type?.toLowerCase() === targetType.toLowerCase() || 
+          (targetType.toLowerCase() === 'renewal medical license' && s.submission_type === null)
+  );
+  console.log(`[patientService] Found ${typeSubmissions.length} submissions of type '${typeLabel}' (target: '${targetType.toLowerCase()}').`);
+
+  if (typeSubmissions.length === 0) {
+    return { topLocation: null, monthlyTrend: [], totalCount: 0 };
+  }
+
+  const countsByLocation: Record<string, number> = {};
+  typeSubmissions.forEach((s) => {
+    const location = s.dispensary_location || 'Unknown Location';
+    countsByLocation[location] = (countsByLocation[location] || 0) + 1;
+  });
+
+  let topLocationValue: string | null = null;
+  let maxCount = 0;
+  for (const [location, count] of Object.entries(countsByLocation)) {
+    if (count > maxCount) {
+      maxCount = count;
+      topLocationValue = location;
+    }
+  }
+  const topLocationStat = topLocationValue ? { name: topLocationValue, count: maxCount } : null;
+
+  // FIXED: Generate monthly trend to include current month (i=0) and previous months
+  const monthlyTrendDataMap: Record<string, { month: string; monthKey: string; count: number }> = {};
+  const today = new Date();
+  
+  for (let i = monthsLookback - 1; i >= 0; i--) { // i=3,2,1,0 for 4 months including current
+    const targetDate = subMonths(today, i);
+    const monthKey = format(targetDate, 'yyyy-MM');
+    const monthLabel = format(targetDate, 'MMM yy');
+    monthlyTrendDataMap[monthKey] = { month: monthLabel, monthKey, count: 0 };
+    console.log(`[patientService] Added monthly trend key for ${typeLabel}: ${monthKey} (${monthLabel}) - Today: ${format(today, 'yyyy-MM-dd')}, i=${i}`);
+  }
+
+  // Count submissions for each month
+  typeSubmissions.forEach((s) => {
+    if (s.submitted_at) {
+      const parsedDate = parseISO(s.submitted_at);
+      if (isValid(parsedDate)) {
+        const submissionMonthKey = format(parsedDate, 'yyyy-MM');
+        if (monthlyTrendDataMap[submissionMonthKey]) {
+          monthlyTrendDataMap[submissionMonthKey].count++;
+          console.log(`[patientService] Counted ${typeLabel} submission in ${submissionMonthKey}: ${s.dispensary_location}`);
+        }
+      }
+    }
+  });
+
+  const monthlyTrend = Object.values(monthlyTrendDataMap).sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  console.log(`[patientService] Calculated monthly trend for type '${typeLabel}':`, monthlyTrend);
+
+  return { topLocation: topLocationStat, monthlyTrend, totalCount: typeSubmissions.length };
+};
+
+// FIXED: fetchLicenseSubmissionStats function with current month inclusion
+export async function fetchLicenseSubmissionStats(): Promise<SubmissionStats> {
+  console.log('[patientService] Fetching ALL license submissions for dashboard stats (no status filter)...');
+
+  const { data: allSubmissions, error: allError } = await supabase
+    .from('license_submissions')
+    .select('id, dispensary_location, submission_type, submitted_at')
+    .order('submitted_at', { ascending: false }) 
+    .limit(1000); 
+
+  if (allError) {
+    console.error('[patientService] Supabase error fetching submissions for stats calculation. Raw error object:', JSON.stringify(allError, Object.getOwnPropertyNames(allError), 2));
+    throw new Error('Failed to fetch submissions for stats calculation.');
+  }
+
+  const fetchedCount = allSubmissions?.length || 0;
+  console.log(`[patientService] Fetched ${fetchedCount} total submissions for dashboard stats calculation (capped at ${fetchedCount < 1000 ? fetchedCount : '1000 by Supabase default'}).`);
+
+  if (!allSubmissions || allSubmissions.length === 0) {
+    console.warn("[patientService] No submissions found for stats. Dashboard stats will be empty or show 'No data'.");
+    return {
+      renewalStats: { topLocation: null, monthlyTrend: [], totalCount: 0 },
+      newLicenseStats: { topLocation: null, monthlyTrend: [], totalCount: 0 },
+      allLocationsMonthlyBreakdown: [],
+    };
+  }
+  
+  console.log('[patientService] Sample submissions for stats (first 3):', allSubmissions?.slice(0, 3).map(s => {
+    const parsedDate = s.submitted_at ? parseISO(s.submitted_at) : null;
+    return {
+      id: s.id,
+      raw_submitted_at: s.submitted_at,
+      parsed_submitted_at: parsedDate && isValid(parsedDate) ? format(parsedDate, 'yyyy-MM-dd HH:mm:ss') : 'Invalid or Null Date',
+      is_valid_date: parsedDate ? isValid(parsedDate) : false,
+      submission_type: s.submission_type,
+      dispensary_location: s.dispensary_location
+    };
+  }));
+  
+  const renewalStats = processSubmissionsForType(allSubmissions, 'Renewal Medical License', 'Renewal Medical License', 4);
+  const newLicenseStats = processSubmissionsForType(allSubmissions, 'New Medical License', 'New Medical License', 4);
+
+  // FIXED: Generate month keys to include current month (June 2025)
+  const allLocationsMonthlyBreakdownMap: Record<string, Record<string, { renewals: number; newLicenses: number }>> = {};
+  const todayForBreakdown = new Date();
+  const breakdownMonthKeys: string[] = [];
+  
+  // FIXED: Include current month (i=0) and 3 previous months (i=1,2,3)
+  for (let i = 3; i >= 0; i--) { 
+    const targetDate = subMonths(todayForBreakdown, i);
+    const monthKey = format(targetDate, 'yyyy-MM');
+    breakdownMonthKeys.push(monthKey);
+    console.log(`[patientService] Added month key for breakdown: ${monthKey} (${format(targetDate, 'MMM yyyy')}) - Current date: ${format(todayForBreakdown, 'yyyy-MM-dd')}`);
+}
+
+  console.log('[patientService] All breakdown month keys:', breakdownMonthKeys);
+
+  // FIXED: Filter submissions to include current month properly
+  const submissionsInDateRange = allSubmissions.filter(s => {
+      if (!s.submitted_at) return false;
+      const parsedDate = parseISO(s.submitted_at);
+      if (!isValid(parsedDate)) return false;
+      
+      const submissionMonthKey = format(parsedDate, 'yyyy-MM');
+      const isInRange = breakdownMonthKeys.includes(submissionMonthKey);
+      
+      if (isInRange) {
+        console.log(`[patientService] Including submission from ${submissionMonthKey}: ${s.submission_type} at ${s.dispensary_location}`);
+      }
+      
+      return isInRange;
+  });
+
+  console.log(`[patientService] Filtered ${submissionsInDateRange.length} submissions out of ${allSubmissions.length} for breakdown (last 4 months including current)`);
+
+  // Initialize all locations and months with zero counts
+  const allLocations = new Set<string>();
+  submissionsInDateRange.forEach(s => {
+    const location = s.dispensary_location || 'Unknown Location';
+    allLocations.add(location);
+  });
+
+  // Initialize the breakdown map
+  allLocations.forEach(location => {
+    allLocationsMonthlyBreakdownMap[location] = {};
+    breakdownMonthKeys.forEach(monthKey => { 
+        allLocationsMonthlyBreakdownMap[location][monthKey] = { renewals: 0, newLicenses: 0 };
+    });
+  });
+
+  // FIXED: Process submissions and count them properly
+  submissionsInDateRange.forEach(s => {
+    if (s.submitted_at) { 
+        const parsedDate = parseISO(s.submitted_at); 
+        const monthKey = format(parsedDate, 'yyyy-MM');
+        const location = s.dispensary_location || 'Unknown Location';
+
+        // Ensure location exists in map
+        if (!allLocationsMonthlyBreakdownMap[location]) {
+            allLocationsMonthlyBreakdownMap[location] = {};
+            breakdownMonthKeys.forEach(mk => { 
+                allLocationsMonthlyBreakdownMap[location][mk] = { renewals: 0, newLicenses: 0 };
+            });
+        }
+        
+        const typeLower = s.submission_type?.toLowerCase();
+        // FIXED: Handle NULL submission_type and broader matching
+        if (typeLower === 'renewal medical license' || typeLower === 'renewal' || s.submission_type === null) {
+            allLocationsMonthlyBreakdownMap[location][monthKey].renewals++;
+            console.log(`[patientService] Added renewal for ${location} in ${monthKey} (type: ${s.submission_type})`);
+        } else if (typeLower === 'new medical license' || typeLower === 'new') {
+            allLocationsMonthlyBreakdownMap[location][monthKey].newLicenses++;
+            console.log(`[patientService] Added new license for ${location} in ${monthKey} (type: ${s.submission_type})`);
+        } else {
+            console.log(`[patientService] Unknown submission type: '${s.submission_type}' for ${location} in ${monthKey}`);
+        }
+    }
+  });
+
+  // Build the final breakdown array
+  const allLocationsMonthlyBreakdown: MonthlyLocationBreakdown[] = [];
+  for (const location in allLocationsMonthlyBreakdownMap) {
+    for (const monthKey of breakdownMonthKeys) { 
+        const monthDate = parseISO(`${monthKey}-01`); 
+        const monthLabel = format(monthDate, 'MMM yy');
+        
+        const renewals = allLocationsMonthlyBreakdownMap[location][monthKey]?.renewals || 0;
+        const newLicenses = allLocationsMonthlyBreakdownMap[location][monthKey]?.newLicenses || 0;
+        
+        allLocationsMonthlyBreakdown.push({
+            location,
+            month: monthLabel,
+            monthKey,
+            renewals,
+            newLicenses,
+        });
+        
+        if (renewals > 0 || newLicenses > 0) {
+          console.log(`[patientService] Final breakdown entry: ${location} - ${monthLabel} - R:${renewals} N:${newLicenses}`);
+        }
+    }
+  }
+
+  // Sort by location then by month
+  allLocationsMonthlyBreakdown.sort((a, b) => {
+    if (a.location < b.location) return -1;
+    if (a.location > b.location) return 1;
+    return a.monthKey.localeCompare(b.monthKey); 
+  });
+
+  console.log(`[patientService] Top Renewal Location for stats:`, renewalStats.topLocation);
+  console.log(`[patientService] Top New License Location for stats:`, newLicenseStats.topLocation);
+  console.log(`[patientService] Total locations in breakdown: ${new Set(allLocationsMonthlyBreakdown.map(b => b.location)).size}`);
+  console.log(`[patientService] Breakdown entries with data:`, allLocationsMonthlyBreakdown.filter(b => b.renewals > 0 || b.newLicenses > 0).length);
+  
+  if (renewalStats.monthlyTrend.every(m => m.count === 0) && renewalStats.totalCount > 0) {
+    console.warn(`[patientService] Renewal monthly trend for stats is empty (all zero counts), but renewal submissions exist. Check 'submitted_at' field format and date range logic.`);
+  }
+  if (newLicenseStats.monthlyTrend.every(m => m.count === 0) && newLicenseStats.totalCount > 0) {
+     console.warn(`[patientService] New License monthly trend for stats is empty (all zero counts), but new license submissions exist. Check 'submitted_at' field format and date range logic.`);
+  }
+
+  return {
+    renewalStats,
+    newLicenseStats,
+    allLocationsMonthlyBreakdown,
+  };
+}
+
+export async function fetchPatientMarketingHistory(patientEmail: string): Promise<MarketingSendLog[]> {
+  if (!patientEmail || patientEmail.trim() === '') {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('marketing_campaign_sends')
+    .select('*')
+    .eq('subscriber_email', patientEmail)
+    .order('sent_at', { ascending: false })
+    .limit(50); 
+
+  if (error) {
+    console.error(`[patientService] Error fetching marketing history for ${patientEmail}:`, error);
+    throw new Error('Failed to fetch patient marketing communication history.');
+  }
+
+  if (!data) {
+    return [];
+  }
+  return data.map(log => ({
+    ...log,
+    id: log.id.toString(), 
+  })) as MarketingSendLog[];
+}
+
+// UPDATED: Fixed renewal rate calculation using correct Supabase count queries
+export async function fetchDashboardExpirationCardStats(): Promise<DashboardExpirationCardStats> {
+  try {
+    // Get current date for calculations
+    const now = new Date();
+    const currentDate = format(now, 'yyyy-MM-dd');
+    
+    // Calculate date ranges for 30, 60, 90 days
+    const in30Days = format(addDays(now, 30), 'yyyy-MM-dd');
+    const in60Days = format(addDays(now, 60), 'yyyy-MM-dd');
+    const in90Days = format(addDays(now, 90), 'yyyy-MM-dd');
+    
+    // Current month for renewal rate calculation
+    const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+    const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+
+    console.log('[fetchDashboardExpirationCardStats] Date ranges:', {
+      currentDate,
+      currentMonthStart,
+      currentMonthEnd,
+      in30Days,
+      in60Days,
+      in90Days
+    });
+
+    // 1. Get expired customers (licenses already expired) - UPDATED TO USE CUSTOMERS
+    const { data: expiredData, error: expiredError } = await supabase
+      .from('customers')
+      .select('customerid, licenseexpyear, licenseexpmonth')
+      .eq('deleted', 0)
+      .not('licenseexpyear', 'is', null)
+      .not('licenseexpmonth', 'is', null);
+
+    if (expiredError) throw expiredError;
+    
+    const expiredCount = expiredData?.filter(customer => {
+      const year = parseInt(customer.licenseexpyear);
+      const month = parseInt(customer.licenseexpmonth);
+      if (year > 1900 && month >= 1 && month <= 12) {
+        const expDate = new Date(year, month - 1, 1);
+        expDate.setMonth(expDate.getMonth() + 1);
+        expDate.setDate(expDate.getDate() - 1);
+        return expDate < now;
+      }
+      return false;
+    }).length || 0;
+
+    if (expiredError) throw expiredError;
+
+    // 2. Get customers expiring in next 30 days - UPDATED TO USE CUSTOMERS
+    const { data: expiring30Data, error: expiring30Error } = await supabase
+      .from('customers')
+      .select('customerid, licenseexpyear, licenseexpmonth')
+      .eq('deleted', 0)
+      .not('licenseexpyear', 'is', null)
+      .not('licenseexpmonth', 'is', null);
+
+    if (expiring30Error) throw expiring30Error;
+    
+    const expiring30Count = expiring30Data?.filter(customer => {
+      const year = parseInt(customer.licenseexpyear);
+      const month = parseInt(customer.licenseexpmonth);
+      if (year > 1900 && month >= 1 && month <= 12) {
+        const expDate = new Date(year, month - 1, 1);
+        expDate.setMonth(expDate.getMonth() + 1);
+        expDate.setDate(expDate.getDate() - 1);
+        const in30DaysDate = addDays(now, 30);
+        return expDate >= now && expDate <= in30DaysDate;
+      }
+      return false;
+    }).length || 0;
+
+    if (expiring30Error) throw expiring30Error;
+
+    // 3. Get customers expiring in next 60 days (31-60 days from now) - UPDATED TO USE CUSTOMERS
+    const { data: expiring60Data, error: expiring60Error } = await supabase
+      .from('customers')
+      .select('customerid, licenseexpyear, licenseexpmonth')
+      .eq('deleted', 0)
+      .not('licenseexpyear', 'is', null)
+      .not('licenseexpmonth', 'is', null);
+
+    if (expiring60Error) throw expiring60Error;
+    
+    const expiring60Count = expiring60Data?.filter(customer => {
+      const year = parseInt(customer.licenseexpyear);
+      const month = parseInt(customer.licenseexpmonth);
+      if (year > 1900 && month >= 1 && month <= 12) {
+        const expDate = new Date(year, month - 1, 1);
+        expDate.setMonth(expDate.getMonth() + 1);
+        expDate.setDate(expDate.getDate() - 1);
+        const in31DaysDate = addDays(now, 31);
+        const in60DaysDate = addDays(now, 60);
+        return expDate >= in31DaysDate && expDate <= in60DaysDate;
+      }
+      return false;
+    }).length || 0;
+
+    if (expiring60Error) throw expiring60Error;
+
+    // 4. Get customers expiring in next 90 days (61-90 days from now) - UPDATED TO USE CUSTOMERS
+    const { data: expiring90Data, error: expiring90Error } = await supabase
+      .from('customers')
+      .select('customerid, licenseexpyear, licenseexpmonth')
+      .eq('deleted', 0)
+      .not('licenseexpyear', 'is', null)
+      .not('licenseexpmonth', 'is', null);
+
+    if (expiring90Error) throw expiring90Error;
+    
+    const expiring90Count = expiring90Data?.filter(customer => {
+      const year = parseInt(customer.licenseexpyear);
+      const month = parseInt(customer.licenseexpmonth);
+      if (year > 1900 && month >= 1 && month <= 12) {
+        const expDate = new Date(year, month - 1, 1);
+        expDate.setMonth(expDate.getMonth() + 1);
+        expDate.setDate(expDate.getDate() - 1);
+        const in61DaysDate = addDays(now, 61);
+        const in90DaysDate = addDays(now, 90);
+        return expDate >= in61DaysDate && expDate <= in90DaysDate;
+      }
+      return false;
+    }).length || 0;
+
+    if (expiring90Error) throw expiring90Error;
+
+    // 5. Get customers expiring in current month - UPDATED TO USE CUSTOMERS
+    const { data: patientsExpiringData, error: patientsExpiringError } = await supabase
+      .from('customers')
+      .select('customerid, licenseexpyear, licenseexpmonth')
+      .eq('deleted', 0)
+      .not('licenseexpyear', 'is', null)
+      .not('licenseexpmonth', 'is', null);
+
+    if (patientsExpiringError) throw patientsExpiringError;
+    
+    const patientsExpiringThisMonth = patientsExpiringData?.filter(customer => {
+      const year = parseInt(customer.licenseexpyear);
+      const month = parseInt(customer.licenseexpmonth);
+      if (year > 1900 && month >= 1 && month <= 12) {
+        const expDate = new Date(year, month - 1, 1);
+        expDate.setMonth(expDate.getMonth() + 1);
+        expDate.setDate(expDate.getDate() - 1);
+        const monthStart = startOfMonth(now);
+        const monthEnd = endOfMonth(now);
+        return expDate >= monthStart && expDate <= monthEnd;
+      }
+      return false;
+    }).length || 0;
+
+    if (patientsExpiringError) throw patientsExpiringError;
+
+    // 6. Get renewals submitted in current month - FIXED COUNT QUERY
+    const { count: renewalsSubmittedThisMonth, error: renewalsError } = await supabase
+      .from('license_submissions')
+      .select('*', { count: 'exact', head: true })
+      .gte('submitted_at', currentMonthStart)
+      .lte('submitted_at', currentMonthEnd)
+      .ilike('submission_type', '%renewal%');
+
+    if (renewalsError) throw renewalsError;
+
+    // Calculate renewal rate: min(renewals ÷ expiring × 100, 100)
+    let renewalRatePercentage = 0;
+    if (patientsExpiringThisMonth && patientsExpiringThisMonth > 0) {
+      renewalRatePercentage = Math.min(
+        Math.round(((renewalsSubmittedThisMonth || 0) / patientsExpiringThisMonth) * 100 * 10) / 10, // Round to 1 decimal
+        100
+      );
+    }
+
+    console.log('[fetchDashboardExpirationCardStats] Renewal rate calculation:', {
+      patientsExpiringThisMonth: patientsExpiringThisMonth || 0,
+      renewalsSubmittedThisMonth: renewalsSubmittedThisMonth || 0,
+      calculatedPercentage: renewalRatePercentage
+    });
+
+    const stats: DashboardExpirationCardStats = {
+      expiredPatients: expiredCount || 0,
+      expiringIn30Days: expiring30Count || 0,
+      expiringIn60Days: expiring60Count || 0,
+      expiringIn90Days: expiring90Count || 0,
+      renewalRatePercentage: renewalRatePercentage
+    };
+
+    console.log('[fetchDashboardExpirationCardStats] Final stats:', stats);
+
+    return stats;
+
+  } catch (error) {
+    console.error('[fetchDashboardExpirationCardStats] Error:', error);
+    return { 
+      expiredPatients: 0,
+      expiringIn30Days: 0,
+      expiringIn60Days: 0,
+      expiringIn90Days: 0,
+      renewalRatePercentage: 0
+    };
+  }
+}
+
+export async function fetchMonthlyExpirationChartData(): Promise<ExpirationDataPoint[]> {
+  console.log("[patientService] Fetching monthly expiration chart data via RPC...");
+  const { data, error } = await supabase.rpc('get_monthly_expiration_counts');
+
+  if (error) {
+    console.error("[patientService] Error fetching monthly expiration chart data via RPC:", error);
+    throw new Error("Failed to fetch monthly expiration chart data.");
+  }
+
+  if (!data) {
+    console.warn("[patientService] No data returned from get_monthly_expiration_counts RPC.");
+    return [];
+  }
+  
+  const chartData: ExpirationDataPoint[] = data.map((item: any) => ({
+    month: item.month_label, 
+    patients: item.patient_count, 
+  }));
+
+  console.log("[patientService] Successfully fetched and transformed monthly expiration chart data:", chartData);
+  return chartData;
+}
+
+// ENHANCED: Call logging functions with better integration for license renewal tracking
+export interface CallLog {
+  id: string;
+  patient_id: number;
+  call_outcome: string;
+  call_notes?: string;
+  created_at: string;
+  user_id?: number;
+  call_duration?: number;
+  follow_up_date?: string;
+  priority_level?: string;
+}
+
+export interface CallOutcomeType {
+  id: number;
+  outcome_code: string;
+  outcome_label: string;
+  description?: string;
+  is_active: boolean;
+  sort_order: number;
+}
+
+// Fetch call logs for a specific patient
+export async function fetchCallLogsByPatientId(patientId: number): Promise<CallLog[]> {
+  if (isNaN(patientId)) {
+    console.error("[patientService] Invalid patient ID provided to fetchCallLogsByPatientId:", patientId);
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('*')
+    .eq('patient_id', patientId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error(`[patientService] Error fetching call logs for patient ${patientId}:`, error);
+    throw new Error('Failed to fetch call logs.');
+  }
+
+  return (data || []).map(log => ({
+    ...log,
+    id: log.id.toString(),
+    created_at: log.created_at
+  })) as CallLog[];
+}
+
+// Add a new call log
+export async function addCallLog(
+  patientId: number, 
+  callOutcome: string, 
+  callNotes?: string,
+  callDuration?: number,
+  followUpDate?: string,
+  priorityLevel?: string
+): Promise<CallLog> {
+  if (isNaN(patientId) || !callOutcome.trim()) {
+    throw new Error('Invalid input for adding call log.');
+  }
+
+  const callLogData: any = {
+    patient_id: patientId,
+    call_outcome: callOutcome,
+    call_notes: callNotes || null,
+    call_duration: callDuration || null,
+    follow_up_date: followUpDate || null,
+    priority_level: priorityLevel || 'normal'
+  };
+
+  const { data, error } = await supabase
+    .from('call_logs')
+    .insert([callLogData])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('[patientService] Error adding call log:', error);
+    throw new Error('Failed to add call log.');
+  }
+
+  return {
+    ...data,
+    id: data.id.toString(),
+    created_at: data.created_at
+  } as CallLog;
+}
+
+// ENHANCED: Fetch available call outcome types with better license renewal context
+export async function fetchCallOutcomeTypes(): Promise<CallOutcomeType[]> {
+  const { data, error } = await supabase
+    .from('call_outcome_types')
+    .select('*')
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  if (error) {
+    console.error('[patientService] Error fetching call outcome types:', error);
+    // Return enhanced default options focused on license renewal process
+    return [
+      { id: 1, outcome_code: 'LICENSE_RENEWAL_INTERESTED', outcome_label: 'Interested in License Renewal', is_active: true, sort_order: 1 },
+      { id: 2, outcome_code: 'LICENSE_RENEWAL_SCHEDULED', outcome_label: 'License Renewal Scheduled', is_active: true, sort_order: 2 },
+      { id: 3, outcome_code: 'RENEWAL_APPOINTMENT_BOOKED', outcome_label: 'Renewal Appointment Booked', is_active: true, sort_order: 3 },
+      { id: 4, outcome_code: 'RENEWAL_DOCUMENTS_NEEDED', outcome_label: 'Renewal Documents Needed', is_active: true, sort_order: 4 },
+      { id: 5, outcome_code: 'RENEWAL_PAYMENT_DISCUSSED', outcome_label: 'Renewal Payment Discussed', is_active: true, sort_order: 5 },
+      { id: 6, outcome_code: 'NOT_INTERESTED', outcome_label: 'Not Interested in Renewal', is_active: true, sort_order: 10 },
+      { id: 7, outcome_code: 'NO_ANSWER', outcome_label: 'No Answer', is_active: true, sort_order: 20 },
+      { id: 8, outcome_code: 'CALLBACK_REQUESTED', outcome_label: 'Callback Requested', is_active: true, sort_order: 21 },
+      { id: 9, outcome_code: 'VOICEMAIL_LEFT', outcome_label: 'Voicemail Left', is_active: true, sort_order: 22 },
+      { id: 10, outcome_code: 'WRONG_NUMBER', outcome_label: 'Wrong Number', is_active: true, sort_order: 30 },
+      { id: 11, outcome_code: 'DO_NOT_CALL', outcome_label: 'Do Not Call', is_active: true, sort_order: 40 },
+      { id: 12, outcome_code: 'FOLLOW_UP_NEEDED', outcome_label: 'Follow-up Needed', is_active: true, sort_order: 50 },
+      { id: 13, outcome_code: 'COMPLETED_RENEWAL', outcome_label: 'Completed Renewal Process', is_active: true, sort_order: 60 },
+      { id: 14, outcome_code: 'RENEWAL_EXPIRED_DISCUSSED', outcome_label: 'Expired License Discussed', is_active: true, sort_order: 70 },
+      { id: 15, outcome_code: 'OTHER', outcome_label: 'Other', is_active: true, sort_order: 99 }
+    ];
+  }
+
+  return data || [];
+}
+
+export async function fetchAllCallLogs(limit: number = 20): Promise<CallLog[]> {
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select(`
+      *,
+      customer:customers!patient_id(
+        customerid,
+        firstname,
+        lastname,
+        email,
+        cell
+      )
+    `)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[patientService] Error fetching call logs:', error);
+    throw new Error('Failed to fetch call logs.');
+  }
+
+  return (data || []).map(log => ({
+    ...log,
+    id: log.id.toString(),
+    created_at: log.created_at,
+    customer: log.customer // This will include the joined customer data
+  })) as CallLog[];
+}
+
+// NEW: Enhanced submission analytics for 12-month license renewal periods
+export interface SubmissionAnalytics {
+  totalSubmissions: number;
+  renewalSubmissions: number;
+  newLicenseSubmissions: number;
+  renewalRate: number;
+  monthlyBreakdown: {
+    month: string;
+    renewals: number;
+    newLicenses: number;
+    total: number;
+  }[];
+  topLocations: {
+    location: string;
+    renewals: number;
+    newLicenses: number;
+    total: number;
+  }[];
+  statusBreakdown: {
+    status: string;
+    count: number;
+    percentage: number;
+  }[];
+  paymentStatusBreakdown: {
+    status: string;
+    count: number;
+    percentage: number;
+  }[];
+}
+
+export async function fetchSubmissionAnalytics(startDate?: Date, endDate?: Date): Promise<SubmissionAnalytics> {
+  console.log('[patientService] Fetching submission analytics for license renewal period...');
+  
+  let query = supabase
+    .from('license_submissions')
+    .select('submission_type, dispensary_location, status, order_payment_status, submitted_at');
+
+  if (startDate) {
+    query = query.gte('submitted_at', startDate.toISOString());
+  }
+  if (endDate) {
+    query = query.lte('submitted_at', endDate.toISOString());
+  }
+
+  const { data: submissions, error } = await query;
+
+  if (error) {
+    console.error('[patientService] Error fetching submission analytics:', error);
+    throw new Error('Failed to fetch submission analytics.');
+  }
+
+  if (!submissions) {
+    return {
+      totalSubmissions: 0,
+      renewalSubmissions: 0,
+      newLicenseSubmissions: 0,
+      renewalRate: 0,
+      monthlyBreakdown: [],
+      topLocations: [],
+      statusBreakdown: [],
+      paymentStatusBreakdown: []
+    };
+  }
+
+  const renewals = submissions.filter(s => s.submission_type?.toLowerCase().includes('renewal'));
+  const newLicenses = submissions.filter(s => s.submission_type?.toLowerCase().includes('new'));
+  const renewalRate = submissions.length > 0 ? (renewals.length / submissions.length) * 100 : 0;
+
+  // Monthly breakdown
+  const monthlyMap = new Map<string, { renewals: number; newLicenses: number }>();
+  submissions.forEach(s => {
+    if (s.submitted_at) {
+      const date = parseISO(s.submitted_at);
+      if (isValid(date)) {
+        const monthKey = format(date, 'yyyy-MM');
+        const existing = monthlyMap.get(monthKey) || { renewals: 0, newLicenses: 0 };
+        
+        if (s.submission_type?.toLowerCase().includes('renewal')) {
+          existing.renewals++;
+        } else if (s.submission_type?.toLowerCase().includes('new')) {
+          existing.newLicenses++;
+        }
+        
+        monthlyMap.set(monthKey, existing);
+      }
+    }
+  });
+
+  const monthlyBreakdown = Array.from(monthlyMap.entries())
+    .map(([monthKey, data]) => ({
+      month: format(parseISO(`${monthKey}-01`), 'MMM yyyy'),
+      renewals: data.renewals,
+      newLicenses: data.newLicenses,
+      total: data.renewals + data.newLicenses
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  // Location breakdown
+  const locationMap = new Map<string, { renewals: number; newLicenses: number }>();
+  submissions.forEach(s => {
+    const location = s.dispensary_location || 'Unknown';
+    const existing = locationMap.get(location) || { renewals: 0, newLicenses: 0 };
+    
+    if (s.submission_type?.toLowerCase().includes('renewal')) {
+      existing.renewals++;
+    } else if (s.submission_type?.toLowerCase().includes('new')) {
+      existing.newLicenses++;
+    }
+    
+    locationMap.set(location, existing);
+  });
+
+  const topLocations = Array.from(locationMap.entries())
+    .map(([location, data]) => ({
+      location,
+      renewals: data.renewals,
+      newLicenses: data.newLicenses,
+      total: data.renewals + data.newLicenses
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 10);
+
+  // Status breakdown
+  const statusMap = new Map<string, number>();
+  submissions.forEach(s => {
+    const status = s.status || 'Unknown';
+    statusMap.set(status, (statusMap.get(status) || 0) + 1);
+  });
+
+  const statusBreakdown = Array.from(statusMap.entries())
+    .map(([status, count]) => ({
+      status,
+      count,
+      percentage: (count / submissions.length) * 100
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  // Payment status breakdown
+  const paymentMap = new Map<string, number>();
+  submissions.forEach(s => {
+    const status = s.order_payment_status || 'Unknown';
+    paymentMap.set(status, (paymentMap.get(status) || 0) + 1);
+  });
+
+  const paymentStatusBreakdown = Array.from(paymentMap.entries())
+    .map(([status, count]) => ({
+      status,
+      count,
+      percentage: (count / submissions.length) * 100
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalSubmissions: submissions.length,
+    renewalSubmissions: renewals.length,
+    newLicenseSubmissions: newLicenses.length,
+    renewalRate,
+    monthlyBreakdown,
+    topLocations,
+    statusBreakdown,
+    paymentStatusBreakdown
+  };
+}

@@ -1,0 +1,86 @@
+/**
+ * MIGRATED: This page has been replaced by automatic synchronization from BioTrack
+ * Patients are now automatically synced from the customers table in BioTrack
+ */
+
+"use client";
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { AlertCircle, ArrowRight, Database } from 'lucide-react';
+
+export default function PatientImportRedirect() {
+  const router = useRouter();
+
+  useEffect(() => {
+    // Auto-redirect after 5 seconds
+    const timer = setTimeout(() => {
+      router.push('/patients');
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [router]);
+
+  return (
+    <div className="container mx-auto py-6">
+      <Card className="max-w-2xl mx-auto">
+        <CardHeader className="text-center">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100">
+            <Database className="h-6 w-6 text-blue-600" />
+          </div>
+          <CardTitle className="text-2xl">Patient Import No Longer Needed</CardTitle>
+          <CardDescription>
+            Patients are now automatically synchronized from BioTrack
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-start space-x-3">
+              <AlertCircle className="h-5 w-5 text-blue-600 mt-0.5" />
+              <div>
+                <h3 className="font-semibold text-blue-900">Automatic Synchronization Active</h3>
+                <p className="text-blue-700 text-sm mt-1">
+                  Patient data is now automatically synced from BioTrack customers with licenses expiring in the next 6 months. 
+                  No manual import is required.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <h4 className="font-semibold">What's changed:</h4>
+            <ul className="text-sm text-gray-600 space-y-1">
+              <li>• Patients are automatically synced from BioTrack</li>
+              <li>• Only customers with licenses expiring soon are imported</li>
+              <li>• Data is always up-to-date with BioTrack</li>
+              <li>• License expiration dates are calculated automatically</li>
+            </ul>
+          </div>
+
+          <div className="flex space-x-3 pt-4">
+            <Button 
+              onClick={() => router.push('/patients')}
+              className="flex-1"
+            >
+              <ArrowRight className="h-4 w-4 mr-2" />
+              View Patients
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={() => router.push('/admin')}
+              className="flex-1"
+            >
+              Admin Dashboard
+            </Button>
+          </div>
+
+          <p className="text-xs text-gray-500 text-center">
+            Redirecting to patients page in 5 seconds...
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
