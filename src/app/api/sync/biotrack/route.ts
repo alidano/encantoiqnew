@@ -2,23 +2,67 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { Client } from 'pg';
+import { getDatabaseConfig, DatabaseConfig } from '@/lib/database-config';
 
 // Configuración de Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-// Configuración de BioTrack
-const biotrackConfig = {
-  host: process.env.BIOTRACK_HOST || '64.89.2.20',
-  port: parseInt(process.env.BIOTRACK_PORT || '5432'),
-  database: process.env.BIOTRACK_DATABASE || 'biotrackthc',
-  user: process.env.BIOTRACK_USER || 'egro',
-  password: process.env.BIOTRACK_PASSWORD || 'swfCi2i4R7NSuEe64TD40qYDuud',
-  ssl: false,
-};
+// Helper function para manejar errores
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
 
-async function testBioTrackConnection(): Promise<boolean> {
+// Helper function para verificar si una columna existe
+async function columnExists(client: Client, table: string, column: string): Promise<boolean> {
+  try {
+    const result = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = $1 AND column_name = $2
+    `, [table, column]);
+    return result.rows.length > 0;
+  } catch (error) {
+    console.warn(`Warning: Could not check if column ${column} exists in ${table}:`, getErrorMessage(error));
+    return false;
+  }
+}
+
+// Helper function para obtener valor seguro de una columna
+function getSafeValue(row: any, column: string, fallback: any = null): any {
+  return row.hasOwnProperty(column) ? row[column] : fallback;
+}
+
+// Función para obtener configuración de BioTrack basada en el ID
+function getBioTrackConfig(databaseId: string): {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  ssl: boolean;
+} {
+  const config = getDatabaseConfig(databaseId);
+  if (!config) {
+    throw new Error(`Database configuration not found for ID: ${databaseId}`);
+  }
+  
+  return {
+    host: config.host,
+    port: config.port,
+    database: config.database,
+    user: config.user,
+    password: config.password,
+    ssl: config.ssl,
+  };
+}
+
+async function testBioTrackConnection(databaseId: string): Promise<boolean> {
+  const biotrackConfig = getBioTrackConfig(databaseId);
   const client = new Client(biotrackConfig);
   try {
     await client.connect();
@@ -32,7 +76,8 @@ async function testBioTrackConnection(): Promise<boolean> {
   }
 }
 
-async function getBioTrackTableCounts(): Promise<Record<string, number>> {
+async function getBioTrackTableCounts(databaseId: string): Promise<Record<string, number>> {
+  const biotrackConfig = getBioTrackConfig(databaseId);
   const client = new Client(biotrackConfig);
   try {
     await client.connect();
@@ -64,7 +109,8 @@ async function getBioTrackTableCounts(): Promise<Record<string, number>> {
 }
 
 // Sync locations from BioTrack
-async function syncLocations(limit = 100): Promise<any> {
+async function syncLocations(databaseId: string, limit = 100): Promise<any> {
+  const biotrackConfig = getBioTrackConfig(databaseId);
   const client = new Client(biotrackConfig);
   const result = {
     success: false,
@@ -144,9 +190,10 @@ async function syncLocations(limit = 100): Promise<any> {
             result.recordsInserted++;
           }
         }
-      } catch (error) {
-        result.errors.push(`Error procesando location: ${error.message}`);
-      }
+              } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          result.errors.push(`Error procesando location: ${errorMessage}`);
+        }
     }
 
     result.success = result.errors.length === 0;
@@ -160,7 +207,8 @@ async function syncLocations(limit = 100): Promise<any> {
   }
 }
 
-async function syncCustomers(limit = 100): Promise<any> {
+async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
+  const biotrackConfig = getBioTrackConfig(databaseId);
   const client = new Client(biotrackConfig);
   const result = {
     success: false,
@@ -175,61 +223,144 @@ async function syncCustomers(limit = 100): Promise<any> {
   try {
     await client.connect();
     
-    // FILTRO INTELIGENTE: Solo customers con licencias que expiran en ventana de 12 meses
-    // (6 meses pasados + 6 meses futuros para automatizaciones y llamadas)
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+    // NUEVO FILTRO: Todos los customers válidos para campañas de renovación
+    // - Con licencia que empiece con "PA" (Puerto Rico)
+    // - Con fecha de expiración válida
+    // - Con al menos teléfono O email
+    // - Sin límite de tiempo de inactividad (incluye todos para ofertas de renovación)
     
-    const sixMonthsFromNow = new Date();
-    sixMonthsFromNow.setMonth(sixMonthsFromNow.getMonth() + 6);
+    console.log(`🔍 Sincronizando TODOS los customers válidos para campañas de renovación:`);
+    console.log(`   ✅ Licencias médicas que empiecen con "PA" (Puerto Rico)`);
+    console.log(`   ✅ Con fecha de expiración de licencia médica válida`);
+    console.log(`   ✅ Con al menos teléfono O email`);
+    console.log(`   ✅ Incluye customers inactivos (para ofertas de renovación)`);
     
-    const pastYear = sixMonthsAgo.getFullYear();
-    const pastMonth = sixMonthsAgo.getMonth() + 1;
-    const futureYear = sixMonthsFromNow.getFullYear();
-    const futureMonth = sixMonthsFromNow.getMonth() + 1;
-    
-    console.log(`📅 Sincronizando customers con ventana de 12 meses:`);
-    console.log(`   Desde: ${pastMonth}/${pastYear} (6 meses atrás)`);
-    console.log(`   Hasta: ${futureMonth}/${futureYear} (6 meses adelante)`);
-    
-    const query = `
+    // Construir query dinámicamente basado en columnas disponibles
+    let query = `
       SELECT 
         customerid, lastname, firstname, middlename,
         birthmonth, birthday, birthyear,
         phone, email, cell, address1, address2, city, state, zip,
-        licensenum, licenseexpmonth, licenseexpyear,
-        createdate, modified_on, deleted, location, ismember,
-        visits, amountspent, points, discount, membersince
+        createdate, deleted, location, ismember
+    `;
+    
+    // Verificar columnas opcionales y agregarlas si existen
+    const hasModifiedOn = await columnExists(client, 'customers', 'modified_on');
+    const hasVisits = await columnExists(client, 'customers', 'visits');
+    const hasAmountSpent = await columnExists(client, 'customers', 'amountspent');
+    const hasPoints = await columnExists(client, 'customers', 'points');
+    const hasDiscount = await columnExists(client, 'customers', 'discount');
+    const hasMemberSince = await columnExists(client, 'customers', 'membersince');
+    const hasRedCard = await columnExists(client, 'customers', 'redcard');
+    const hasRedCardMonth = await columnExists(client, 'customers', 'redcardmonth');
+    const hasRedCardDay = await columnExists(client, 'customers', 'redcardday');
+    const hasRedCardYear = await columnExists(client, 'customers', 'redcardyear');
+    const hasRedCardTime = await columnExists(client, 'customers', 'redcardtime');
+    
+    if (hasModifiedOn) query += ', modified_on';
+    if (hasVisits) query += ', visits';
+    if (hasAmountSpent) query += ', amountspent';
+    if (hasPoints) query += ', points';
+    if (hasDiscount) query += ', discount';
+    if (hasMemberSince) query += ', membersince';
+    if (hasRedCard) query += ', redcard';
+    if (hasRedCardMonth) query += ', redcardmonth';
+    if (hasRedCardDay) query += ', redcardday';
+    if (hasRedCardYear) query += ', redcardyear';
+    if (hasRedCardTime) query += ', redcardtime';
+    
+    query += `
       FROM customers
-      WHERE deleted = 0 
-        AND licenseexpyear IS NOT NULL 
-        AND licenseexpmonth IS NOT NULL
-        AND licenseexpyear != ''
-        AND licenseexpmonth != ''
-        AND CAST(licenseexpyear AS INTEGER) > 1900
-        AND CAST(licenseexpmonth AS INTEGER) BETWEEN 1 AND 12
-        AND (
-          -- 6 meses pasados: desde pastYear/pastMonth hasta hoy
-          (CAST(licenseexpyear AS INTEGER) = ${pastYear} AND CAST(licenseexpmonth AS INTEGER) >= ${pastMonth})
-          OR
-          (CAST(licenseexpyear AS INTEGER) > ${pastYear} AND CAST(licenseexpyear AS INTEGER) < ${futureYear})
-          OR
-          -- 6 meses futuros: desde hoy hasta futureYear/futureMonth  
-          (CAST(licenseexpyear AS INTEGER) = ${futureYear} AND CAST(licenseexpmonth AS INTEGER) <= ${futureMonth})
-        )
-      ORDER BY CAST(licenseexpyear AS INTEGER), CAST(licenseexpmonth AS INTEGER)
-      LIMIT ${limit}
+      WHERE deleted = 0
+    `;
+    
+    // Solo aplicar filtros de licencia si las columnas existen
+    if (hasRedCard && hasRedCardYear && hasRedCardMonth) {
+      query += `
+        AND redcardyear IS NOT NULL 
+        AND redcardmonth IS NOT NULL
+        AND redcardyear != ''
+        AND redcardmonth != ''
+        AND CAST(redcardyear AS INTEGER) > 1900
+        AND CAST(redcardmonth AS INTEGER) BETWEEN 1 AND 12
+        AND redcard IS NOT NULL 
+        AND redcard != ''
+        AND redcard LIKE 'PA%'
+      `;
+    }
+    
+    query += `
+      AND (phone IS NOT NULL AND phone != '' OR email IS NOT NULL AND email != '')
+      ORDER BY customerid
+      ${limit > 0 ? `LIMIT ${limit}` : ''}
     `;
 
-    console.log('🔍 Sincronizando customers en ventana de 12 meses (6 pasados + 6 futuros)...');
+    console.log('🔍 Sincronizando customers válidos para campañas de renovación...');
+    console.log(`🔍 Query ejecutado:`, query.substring(0, 200) + '...');
+    
     const biotrackData = await client.query(query);
     result.recordsProcessed = biotrackData.rows.length;
-    console.log(`📊 Encontrados ${result.recordsProcessed} customers en ventana de renovación`);
-    console.log(`   ✅ Incluye expirados (para follow-up) y próximos (para preventivo)`);
-    console.log(`   ❌ Excluye customers sin fechas de expiración (no útiles para renovaciones)`);
+    console.log(`📊 Encontrados ${result.recordsProcessed} customers válidos para renovación`);
+    console.log(`   ✅ Incluye todos los customers con licencia médica PA válida`);
+    console.log(`   ✅ Con contacto (teléfono o email) para campañas`);
+    console.log(`   ✅ Incluye inactivos para ofertas de renovación`);
+    
+    if (result.recordsProcessed === 0) {
+      console.log(`⚠️  No se encontraron customers que cumplan los criterios`);
+      console.log(`🔍 Verificando si hay customers en la base de datos...`);
+      
+      // Query de prueba para ver cuántos customers hay en total
+      const testQuery = `SELECT COUNT(*) as total FROM customers WHERE deleted = 0`;
+      const testResult = await client.query(testQuery);
+      console.log(`📊 Total de customers activos: ${testResult.rows[0].total}`);
+      
+      // Query para ver cuántos tienen licencia PA
+      const paQuery = `SELECT COUNT(*) as total FROM customers WHERE deleted = 0 AND redcard LIKE 'PA%'`;
+      const paResult = await client.query(paQuery);
+      console.log(`📊 Customers con licencia PA: ${paResult.rows[0].total}`);
+      
+      // Query para ver cuántos tienen fecha de expiración de licencia médica
+      const expQuery = `SELECT COUNT(*) as total FROM customers WHERE deleted = 0 AND redcardyear IS NOT NULL AND redcardmonth IS NOT NULL`;
+      const expResult = await client.query(expQuery);
+      console.log(`📊 Customers con fecha de expiración de licencia médica: ${expResult.rows[0].total}`);
+      
+      // 🔍 NUEVO: Ver ejemplos de licencias para entender el formato
+      console.log(`🔍 Verificando formato de licencias...`);
+      const licenseQuery = `SELECT DISTINCT redcard FROM customers WHERE deleted = 0 AND redcard IS NOT NULL AND redcard != '' LIMIT 10`;
+      const licenseResult = await client.query(licenseQuery);
+      console.log(`📋 Ejemplos de licencias encontradas:`);
+      licenseResult.rows.forEach((row, index) => {
+        console.log(`   ${index + 1}. "${row.redcard}"`);
+      });
+      
+      // Ver cuántos tienen licencia con cualquier formato
+      const anyLicenseQuery = `SELECT COUNT(*) as total FROM customers WHERE deleted = 0 AND redcard IS NOT NULL AND redcard != ''`;
+      const anyLicenseResult = await client.query(anyLicenseQuery);
+      console.log(`📊 Customers con cualquier licencia: ${anyLicenseResult.rows[0].total}`);
+    }
 
+    console.log(`🔄 Procesando ${biotrackData.rows.length} customers...`);
+    
     for (const row of biotrackData.rows) {
       try {
+        // Convertir timestamps de BioTrack a formato ISO para Supabase
+        const convertTimestamp = (timestamp: any) => {
+          if (!timestamp) return null;
+          try {
+            // Si es un string con comas, limpiarlo
+            const cleanTimestamp = timestamp.toString().replace(/,/g, '');
+            const unixTime = parseInt(cleanTimestamp);
+            if (isNaN(unixTime)) return null;
+            
+            // Convertir Unix timestamp a fecha ISO
+            const date = new Date(unixTime * 1000); // Multiplicar por 1000 para convertir a milisegundos
+            return date.toISOString();
+          } catch (error) {
+            console.warn(`Error converting timestamp ${timestamp}:`, error);
+            return null;
+          }
+        };
+
         const customerData = {
           customerid: row.customerid,
           lastname: row.lastname,
@@ -247,25 +378,34 @@ async function syncCustomers(limit = 100): Promise<any> {
           state: row.state,
           zip: row.zip,
           ismember: row.ismember,
-          licensenum: row.licensenum,
-          licenseexpmonth: row.licenseexpmonth,
-          licenseexpyear: row.licenseexpyear,
-          createdate: row.createdate,
-          modified_on_bt: row.modified_on,
+          createdate: convertTimestamp(getSafeValue(row, 'createdate')),
+          modified_on_bt: getSafeValue(row, 'modified_on'),
           deleted: row.deleted,
           location: row.location,
-          // Columnas nuevas esenciales
-          visits: row.visits || 0,
-          amountspent: row.amountspent || 0,
-          points: row.points,
-          discount: row.discount,
-          membersince: row.membersince,
-          modified_on: row.modified_on,
+          // Columnas opcionales con valores por defecto
+          visits: getSafeValue(row, 'visits', 0),
+          amountspent: getSafeValue(row, 'amountspent', 0),
+          points: getSafeValue(row, 'points'),
+          discount: getSafeValue(row, 'discount'),
+          membersince: getSafeValue(row, 'membersince'),
+          modified_on: getSafeValue(row, 'modified_on'),
+          // Licencia de paciente médica (opcional)
+          redcard: getSafeValue(row, 'redcard'),
+          redcardmonth: getSafeValue(row, 'redcardmonth'),
+          redcardday: getSafeValue(row, 'redcardday'),
+          redcardyear: getSafeValue(row, 'redcardyear'),
+          redcardtime: convertTimestamp(getSafeValue(row, 'redcardtime')),
+          // Calcular fecha de expiración de licencia médica si existe
+          license_exp_date: (getSafeValue(row, 'redcardyear') && getSafeValue(row, 'redcardmonth')) ? 
+            `${getSafeValue(row, 'redcardyear')}-${getSafeValue(row, 'redcardmonth').toString().padStart(2, '0')}-${(getSafeValue(row, 'redcardday') || '01').toString().padStart(2, '0')}` : null,
         };
 
         // Log de la fecha de expiración para debug
-        const expDate = `${customerData.licenseexpmonth}/${customerData.licenseexpyear}`;
-        console.log(`👤 ${customerData.firstname} ${customerData.lastname} - Expira: ${expDate} - Visits: ${customerData.visits} - Spent: ${customerData.amountspent}`);
+        const expDate = customerData.redcardmonth && customerData.redcardyear ? 
+          `${customerData.redcardmonth}/${customerData.redcardyear}` : 'No disponible';
+        const contactInfo = customerData.phone || customerData.email || 'Sin contacto';
+        const licenseInfo = customerData.redcard || 'Sin licencia médica';
+        console.log(`👤 ${customerData.firstname} ${customerData.lastname} - Lic Médica: ${licenseInfo} - Expira: ${expDate} - Contacto: ${contactInfo}`);
 
         const { data: existingCustomer } = await supabase
           .from('customers')
@@ -305,7 +445,7 @@ async function syncCustomers(limit = 100): Promise<any> {
           }
         }
       } catch (error) {
-        result.errors.push(`Error procesando customer: ${error.message}`);
+        result.errors.push(`Error procesando customer: ${getErrorMessage(error)}`);
       }
     }
 
@@ -314,14 +454,15 @@ async function syncCustomers(limit = 100): Promise<any> {
     return result;
     
   } catch (error) {
-    result.errors.push(`Error general: ${error.message}`);
+    result.errors.push(`Error general: ${getErrorMessage(error)}`);
     try { await client.end(); } catch {}
     return result;
   }
 }
 
 // Sync products from BioTrack
-async function syncProducts(limit = 100): Promise<any> {
+async function syncProducts(databaseId: string, limit = 100): Promise<any> {
+  const biotrackConfig = getBioTrackConfig(databaseId);
   const client = new Client(biotrackConfig);
   const result = {
     success: false,
@@ -336,13 +477,20 @@ async function syncProducts(limit = 100): Promise<any> {
   try {
     await client.connect();
     
-    const query = `
+    // Construir query dinámicamente basado en columnas disponibles
+    let query = `
       SELECT 
         id, name, taxcategory, productcategory, applymemberdiscount,
-        strain, pricepoint, image, location, deleted, modified_on
+        strain, pricepoint, image, location, deleted
+    `;
+    
+    const hasModifiedOn = await columnExists(client, 'products', 'modified_on');
+    if (hasModifiedOn) query += ', modified_on';
+    
+    query += `
       FROM products
       WHERE deleted = 0
-      ORDER BY modified_on DESC
+      ORDER BY id
       ${limit > 0 ? `LIMIT ${limit}` : ''}
     `;
 
@@ -363,7 +511,7 @@ async function syncProducts(limit = 100): Promise<any> {
           pricepoint: row.pricepoint?.toString(),
           image: row.image,
           location: row.location,
-          modified_on_bt: row.modified_on, // ✅ Ahora sí existe la columna
+          modified_on_bt: getSafeValue(row, 'modified_on'),
           deleted: row.deleted,
         };
 
@@ -423,7 +571,8 @@ async function syncProducts(limit = 100): Promise<any> {
 }
 
 // Sync sales from BioTrack
-async function syncSales(limit = 100): Promise<any> {
+async function syncSales(databaseId: string, limit = 100): Promise<any> {
+  const biotrackConfig = getBioTrackConfig(databaseId);
   const client = new Client(biotrackConfig);
   const result = {
     success: false,
@@ -458,13 +607,28 @@ async function syncSales(limit = 100): Promise<any> {
       description = 'últimos 30 días (incremental)';
     }
     
-    const query = `
+    // Construir query dinámicamente basado en columnas disponibles
+    let query = `
       SELECT 
         id, ticketid, strain, price, tax, total,
         weighheavy, manualweigh, pricepoint, customerid,
         productid, weight, datetime, location,
-        deleted, refunded, modified_on,
-        inventoryid, terminalid, tax_collected, is_medical
+        deleted, refunded
+    `;
+    
+    const hasModifiedOn = await columnExists(client, 'sales', 'modified_on');
+    const hasInventoryId = await columnExists(client, 'sales', 'inventoryid');
+    const hasTerminalId = await columnExists(client, 'sales', 'terminalid');
+    const hasTaxCollected = await columnExists(client, 'sales', 'tax_collected');
+    const hasIsMedical = await columnExists(client, 'sales', 'is_medical');
+    
+    if (hasModifiedOn) query += ', modified_on';
+    if (hasInventoryId) query += ', inventoryid';
+    if (hasTerminalId) query += ', terminalid';
+    if (hasTaxCollected) query += ', tax_collected';
+    if (hasIsMedical) query += ', is_medical';
+    
+    query += `
       FROM sales
       WHERE deleted = 0 
         AND datetime > ${timestampStart}
@@ -502,13 +666,13 @@ async function syncSales(limit = 100): Promise<any> {
           location: row.location,
           deleted: row.deleted,
           refunded: row.refunded,
-          modified_on_bt: row.modified_on,
-          // Columnas nuevas esenciales para dashboard
-          inventoryid: row.inventoryid,
-          terminalid: row.terminalid,
-          tax_collected: row.tax_collected,
-          is_medical: row.is_medical,
-          modified_on: row.modified_on,
+          modified_on_bt: getSafeValue(row, 'modified_on'),
+          // Columnas opcionales para dashboard
+          inventoryid: getSafeValue(row, 'inventoryid'),
+          terminalid: getSafeValue(row, 'terminalid'),
+          tax_collected: getSafeValue(row, 'tax_collected'),
+          is_medical: getSafeValue(row, 'is_medical'),
+          modified_on: getSafeValue(row, 'modified_on'),
         };
 
         const saleDate = new Date(row.datetime * 1000).toLocaleDateString();
@@ -569,12 +733,16 @@ async function syncSales(limit = 100): Promise<any> {
 
 export async function POST(request: NextRequest) {
   try {
-    const { syncType = 'incremental', tables = ['customers'] } = await request.json();
+    const { syncType = 'incremental', tables = ['customers'], databaseId = 'encanto-tree-og' } = await request.json();
     
     console.log(`🚀 Iniciando sincronización ${syncType} para tablas:`, tables);
+    console.log(`🗄️  Base de datos seleccionada:`, databaseId);
+    console.log(`📊 Parámetros recibidos:`, { syncType, tables, databaseId });
+    
+    const startTime = Date.now();
     
     // Test de conexión primero
-    const connectionTest = await testBioTrackConnection();
+    const connectionTest = await testBioTrackConnection(databaseId);
     if (!connectionTest) {
       return NextResponse.json(
         { success: false, error: 'No se pudo conectar a BioTrack' },
@@ -586,26 +754,29 @@ export async function POST(request: NextRequest) {
 
     // Sincronizar locations primero (necesarias para customers)
     if (tables.includes('locations')) {
-      results.push(await syncLocations(100));
+      results.push(await syncLocations(databaseId, 100));
     }
 
     // Sincronizar customers
     if (tables.includes('customers')) {
-      const limit = syncType === 'full' ? 1000 : 100;
-      results.push(await syncCustomers(limit));
+      const limit = syncType === 'full' ? 0 : 100; // 0 = sin límite para full sync
+      results.push(await syncCustomers(databaseId, limit));
     }
 
     // Sincronizar products
     if (tables.includes('products')) {
       const limit = syncType === 'full' ? 0 : 100; // 0 = sin límite para full sync
-      results.push(await syncProducts(limit));
+      results.push(await syncProducts(databaseId, limit));
     }
 
     // Sincronizar sales
     if (tables.includes('sales')) {
       const limit = syncType === 'full' ? 0 : 100; // 0 = sin límite para datos históricos
-      results.push(await syncSales(limit));
+      results.push(await syncSales(databaseId, limit));
     }
+
+    const endTime = Date.now();
+    const duration = endTime - startTime;
 
     const summary = {
       totalRecords: results.reduce((sum, r) => sum + r.recordsProcessed, 0),
@@ -614,28 +785,75 @@ export async function POST(request: NextRequest) {
       errors: results.reduce((sum, r) => sum + r.errors.length, 0),
     };
 
+    // Determinar el estado general de la sincronización
+    let overallStatus: 'success' | 'partial' | 'failed' = 'success';
+    if (summary.errors > 0) {
+      overallStatus = summary.errors < summary.totalRecords ? 'partial' : 'failed';
+    }
+
+    // Obtener el nombre de la base de datos
+    const databaseConfig = getDatabaseConfig(databaseId);
+    const databaseName = databaseConfig?.name || databaseId;
+
+    // Guardar historial en la base de datos
+    try {
+      const { error: historyError } = await supabase
+        .from('sync_history')
+        .insert({
+          database_id: databaseId,
+          database_name: databaseName,
+          sync_type: syncType,
+          tables: tables,
+          start_time: new Date(startTime).toISOString(),
+          end_time: new Date(endTime).toISOString(),
+          duration: duration,
+          total_records: summary.totalRecords,
+          total_inserted: summary.newRecords,
+          total_updated: summary.updatedRecords,
+          total_errors: summary.errors,
+          status: overallStatus,
+          results: results
+        });
+
+      if (historyError) {
+        console.warn('⚠️ No se pudo guardar el historial:', historyError);
+      } else {
+        console.log('✅ Historial de sincronización guardado');
+      }
+    } catch (historyError) {
+      console.warn('⚠️ Error guardando historial:', historyError);
+    }
+
     return NextResponse.json({
       success: true,
       results,
       summary,
       syncType,
-      tables
+      tables,
+      databaseId,
+      duration,
+      status: overallStatus
     });
 
   } catch (error) {
     console.error('❌ Error en API de sincronización:', error);
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const databaseId = searchParams.get('databaseId') || 'encanto-tree-og';
+    
     console.log('🔍 Probando conexión desde API...');
-    const counts = await getBioTrackTableCounts();
-    const connectionTest = await testBioTrackConnection();
+    console.log('🗄️  Base de datos:', databaseId);
+    
+    const counts = await getBioTrackTableCounts(databaseId);
+    const connectionTest = await testBioTrackConnection(databaseId);
     
     console.log('✅ Conexión:', connectionTest);
     console.log('📊 Conteos:', counts);
@@ -644,7 +862,8 @@ export async function GET() {
       success: true,
       connected: connectionTest,
       tableCounts: counts,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      databaseId
     });
 
   } catch (error) {

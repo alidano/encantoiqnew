@@ -31,6 +31,13 @@ export interface Patient {
   renewal_status?: 'Renewed' | 'Pending' | 'Lost';
   license_photo_url?: string;
   email_marketing_status?: string; // e.g., 'Subscribed', 'Unsubscribed'
+  // Campos de licencia de paciente médica
+  redcard?: string; // Licencia médica que empieza con PA
+  redcardmonth?: string; // Mes de expiración de licencia médica
+  redcardday?: string; // Día de expiración de licencia médica
+  redcardyear?: string; // Año de expiración de licencia médica
+  redcardtime?: string; // Timestamp de procesamiento de licencia médica (ISO string)
+  license_exp_date?: string; // Fecha calculada de expiración de licencia médica
 }
 
 // Add these new MailWizz interfaces to your existing types

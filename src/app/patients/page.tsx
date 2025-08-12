@@ -34,9 +34,7 @@ const PatientsPage = () => {
   const [debouncedSearchTerm, setDebouncedSearchTerm] = React.useState('');
   const [filters, setFilters] = React.useState({
     expirationRange: 'all',
-    location: 'all',
-    memberStatus: 'all',
-    emailOptIn: 'all'
+    location: 'all'
   });
   const [selectedRows, setSelectedRows] = React.useState<number[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -49,7 +47,7 @@ const PatientsPage = () => {
   React.useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
-    }, 800); // Updated to 700ms based on recommended range
+    }, 1500); // Increased to 1.5 seconds to give more time to type
 
     return () => clearTimeout(timer);
   }, [searchTerm]);
@@ -87,6 +85,22 @@ const PatientsPage = () => {
       
       setAllPatients(patients);
       setTotalPatients(totalCount);
+      
+      // Debug: Log sample patient data to see what fields are available
+      if (patients.length > 0) {
+        console.log('🔍 Sample patient data:', {
+          id: patients[0].id,
+          name: `${patients[0].firstname} ${patients[0].lastname}`,
+          redcard: patients[0].redcard,
+          license_exp_date: patients[0].license_exp_date,
+          days_to_expiration: patients[0].days_to_expiration,
+          redcardyear: patients[0].redcardyear,
+          redcardmonth: patients[0].redcardmonth,
+          redcardday: patients[0].redcardday,
+          mmj_card: patients[0].mmj_card,
+          mmj_card_expiration: patients[0].mmj_card_expiration
+        });
+      }
 
     } catch (e) {
       const errorMessage = "Failed to load patient data. Please try again later.";
@@ -164,32 +178,6 @@ const PatientsPage = () => {
   
   const isSelectAllChecked = !isLoading && allPatients.length > 0 && allPatients.every(p => selectedRows.includes(p.id));
 
-  const handleLoadAllPatients = async () => {
-    if (!confirm(`This will load ALL patients from the database (potentially thousands). This may take a while and use more memory. Continue?`)) {
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      // Use the fetchAllPatients function you'll create
-      const { patients: allPatientsData } = await fetchPatients({ limit: null });
-      setAllPatients(allPatientsData);
-      setTotalPatients(allPatientsData.length);
-      toast({
-        title: "All Patients Loaded",
-        description: `Loaded ${allPatientsData.length} patients. Use filters to narrow down results.`,
-      });
-    } catch (e) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to load all patients.",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -198,9 +186,6 @@ const PatientsPage = () => {
             Patients {isLoading ? <Loader2 className="inline h-6 w-6 animate-spin" /> : `(${totalPatients.toLocaleString()} total)`}
           </h1>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={handleLoadAllPatients} disabled={isLoading}>
-              <Download className="mr-2 h-4 w-4" /> Load All Patients
-            </Button>
             <Button variant="outline"><Download className="mr-2 h-4 w-4" /> Export</Button>
             <Button><PlusCircle className="mr-2 h-4 w-4" /> Add New Patient</Button>
           </div>
@@ -233,43 +218,23 @@ const PatientsPage = () => {
                   <SelectValue placeholder="Expiration Range" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Expirations</SelectItem>
-                  <SelectItem value="30days">Expiring in 30 Days</SelectItem>
-                  <SelectItem value="60days">Expiring in 60 Days</SelectItem>
-                  <SelectItem value="90days">Expiring in 90 Days</SelectItem>
-                  <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="all">All Active (Non-Expired)</SelectItem>
+                  <SelectItem value="expiring_today">Expiring Today</SelectItem>
+                  <SelectItem value="1to60days">1-60 Days (Most Urgent)</SelectItem>
+                  <SelectItem value="61to120days">61-120 Days</SelectItem>
+                  <SelectItem value="120plusdays">120+ Days</SelectItem>
+                  <SelectItem value="expired">Expired Only</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={filters.location} onValueChange={(value) => handleFilterChange('location', value)} disabled={isLoading}>
- <SelectTrigger className="w-full md:w-[200px]">
+                <SelectTrigger className="w-full md:w-[200px]">
                   <SelectValue placeholder="Location" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Locations</SelectItem>
- {dispensaryNames.map((name, index) => (
- <SelectItem key={`location-${index}-${name}`} value={name}>{name}</SelectItem>
- ))}
-                </SelectContent>
-              </Select>
-              <Select value={filters.memberStatus} onValueChange={(value) => handleFilterChange('memberStatus', value)} disabled={isLoading}>
-                <SelectTrigger className="w-full md:w-[180px]">
-                  <SelectValue placeholder="Member Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Members</SelectItem>
-                  <SelectItem value="VIP">VIP</SelectItem>
-                  <SelectItem value="Member">Member</SelectItem>
-                  <SelectItem value="Non-Member">Non-Member</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={filters.emailOptIn} onValueChange={(value) => handleFilterChange('emailOptIn', value)} disabled={isLoading}>
-                <SelectTrigger className="w-full md:w-[180px]">
-                  <SelectValue placeholder="Email Opt-in" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Email Status</SelectItem>
-                  <SelectItem value="true">Opted In</SelectItem>
-                  <SelectItem value="false">Opted Out</SelectItem>
+                  {dispensaryNames.map((name, index) => (
+                    <SelectItem key={`location-${index}-${name}`} value={name}>{name}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Button variant="outline" className="w-full md:w-auto" disabled={isLoading}><Filter className="mr-2 h-4 w-4" /> More Filters</Button>
@@ -318,7 +283,6 @@ const PatientsPage = () => {
                 <TableHead>MMJ Card</TableHead>
                 <TableHead>Expiration</TableHead>
                 <TableHead className="text-center">Days</TableHead>
-                <TableHead>Member Status</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead className="text-right w-[180px]">Actions</TableHead>
               </TableRow>
@@ -326,7 +290,7 @@ const PatientsPage = () => {
             <TableBody>
               {isLoading || !isClientMounted ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-60 text-center">
+                  <TableCell colSpan={8} className="h-60 text-center">
                     <div className="flex justify-center items-center">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
                       <span className="ml-2">Loading patients...</span>
@@ -358,16 +322,11 @@ const PatientsPage = () => {
                         'Not provided'
                       )}
                     </TableCell>
-                    <TableCell>{patient.mmj_card}</TableCell>
-                    <TableCell>{formatExpirationDate(patient.mmj_card_expiration)}</TableCell>
+                    <TableCell>{patient.mmj_card || patient.redcard || 'N/A'}</TableCell>
+                    <TableCell>{formatExpirationDate(patient.license_exp_date)}</TableCell>
                     <TableCell className="text-center">
                       <Badge variant="outline" className={`px-2 py-0.5 text-xs border whitespace-nowrap ${getDaysBadgeClass(patient.days_to_expiration)}`}>
                         {patient.days_to_expiration === undefined || patient.days_to_expiration === null || isNaN(patient.days_to_expiration) ? 'N/A' : patient.days_to_expiration <= 0 ? 'Expired' : `${patient.days_to_expiration} days`}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={patient.member_status === 'VIP' ? 'default' : 'outline'} className="text-xs">
-                        {patient.member_status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs truncate max-w-[120px]">{patient.dispensary_name?.replace('Encanto Giving Tree LLC ', '')}</TableCell>
@@ -384,7 +343,7 @@ const PatientsPage = () => {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={9} className="h-24 text-center">
+                  <TableCell colSpan={8} className="h-24 text-center">
                     No patients found matching your criteria.
                   </TableCell>
                 </TableRow>

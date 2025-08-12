@@ -1,21 +1,12 @@
 // src/services/biotrackSyncService.ts
 import { createClient } from '@supabase/supabase-js';
 import { Client } from 'pg';
+import { getDatabaseConfig, DatabaseConfig } from '@/lib/database-config';
 
 // Configuración de Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-// Configuración de BioTrack
-const biotrackConfig = {
-  host: process.env.BIOTRACK_HOST || '64.89.2.20',
-  port: parseInt(process.env.BIOTRACK_PORT || '5432'),
-  database: process.env.BIOTRACK_DATABASE || 'biotrackthc',
-  user: process.env.BIOTRACK_USER || 'egro',
-  password: process.env.BIOTRACK_PASSWORD || 'swfCi2i4R7NSuEe64TD40qYDuud',
-  ssl: false, // Ajustar según configuración del servidor
-};
 
 export interface SyncResult {
   success: boolean;
@@ -38,9 +29,22 @@ export interface SyncStats {
 export class BioTrackSyncService {
   private biotrackClient: Client;
   private isConnected = false;
+  private databaseConfig: DatabaseConfig;
 
-  constructor() {
-    this.biotrackClient = new Client(biotrackConfig);
+  constructor(databaseId: string = 'encanto-tree-og') {
+    const config = getDatabaseConfig(databaseId);
+    if (!config) {
+      throw new Error(`Database configuration not found for ID: ${databaseId}`);
+    }
+    this.databaseConfig = config;
+    this.biotrackClient = new Client({
+      host: config.host,
+      port: config.port,
+      database: config.database,
+      user: config.user,
+      password: config.password,
+      ssl: config.ssl,
+    });
   }
 
   async connect(): Promise<void> {
@@ -48,9 +52,9 @@ export class BioTrackSyncService {
       try {
         await this.biotrackClient.connect();
         this.isConnected = true;
-        console.log('✅ Conectado a BioTrack PostgreSQL');
+        console.log(`✅ Conectado a BioTrack PostgreSQL - ${this.databaseConfig.name}`);
       } catch (error) {
-        console.error('❌ Error conectando a BioTrack:', error);
+        console.error(`❌ Error conectando a BioTrack - ${this.databaseConfig.name}:`, error);
         throw error;
       }
     }
@@ -60,7 +64,7 @@ export class BioTrackSyncService {
     if (this.isConnected) {
       await this.biotrackClient.end();
       this.isConnected = false;
-      console.log('🔌 Desconectado de BioTrack');
+      console.log(`🔌 Desconectado de BioTrack - ${this.databaseConfig.name}`);
     }
   }
 

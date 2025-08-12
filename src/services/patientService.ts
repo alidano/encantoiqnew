@@ -10,6 +10,17 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
     return null;
   }
   
+  // Debug: Log raw data for license fields
+  console.log(`[patientService] Raw license data for patient ${rowData.customerid}:`, {
+    redcard: rowData.redcard,
+    redcardyear: rowData.redcardyear,
+    redcardmonth: rowData.redcardmonth,
+    redcardday: rowData.redcardday,
+    licensenum: rowData.licensenum,
+    licenseexpyear: rowData.licenseexpyear,
+    licenseexpmonth: rowData.licenseexpmonth
+  });
+  
   // Convert customerid to number if needed
   let customerId = rowData.customerid;
   if (typeof customerId === 'string') {
@@ -25,24 +36,46 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
     return null;
   }
 
-  // CALCULATE license_exp_date from licenseexpyear and licenseexpmonth
+  // CALCULATE license_exp_date from redcardyear and redcardmonth (licencia médica)
   let rawExpirationDate = '';
   let days_to_expiration = -9999; // Default for invalid/missing dates
 
-  if (rowData.licenseexpyear && rowData.licenseexpmonth) {
+  if (rowData.redcardyear && rowData.redcardmonth) {
     try {
-      const year = parseInt(rowData.licenseexpyear.toString());
-      const month = parseInt(rowData.licenseexpmonth.toString());
+      const year = parseInt(rowData.redcardyear.toString());
+      const month = parseInt(rowData.redcardmonth.toString());
+      const day = rowData.redcardday ? parseInt(rowData.redcardday.toString()) : null;
+      
       if (year > 1900 && month >= 1 && month <= 12) {
-        // Create date as last day of expiration month
-        const expirationDate = new Date(year, month - 1, 1);
-        expirationDate.setMonth(expirationDate.getMonth() + 1);
-        expirationDate.setDate(expirationDate.getDate() - 1);
+        let expirationDate: Date;
+        
+        if (day && day >= 1 && day <= 31) {
+          // Use specific day if available
+          expirationDate = new Date(year, month - 1, day);
+        } else {
+          // Use last day of the month if no specific day
+          expirationDate = new Date(year, month - 1, 1);
+          expirationDate.setMonth(expirationDate.getMonth() + 1);
+          expirationDate.setDate(expirationDate.getDate() - 1);
+        }
+        
         rawExpirationDate = format(expirationDate, 'yyyy-MM-dd');
+        
+        // Calculate days to expiration from current date to expiration date
+        // This is the correct way - always calculate from TODAY to expiration date
         days_to_expiration = differenceInDays(expirationDate, startOfToday());
+        
+        console.log(`[patientService] License expiration calculation:`, {
+          redcard: rowData.redcard,
+          year, month, day,
+          calculatedExpirationDate: rawExpirationDate,
+          daysToExpiration: days_to_expiration,
+          today: format(startOfToday(), 'yyyy-MM-dd'),
+          willShowAsExpired: days_to_expiration <= 0
+        });
       }
     } catch (error) {
-      console.warn('[patientService] Error calculating license expiration date:', error);
+      console.warn('[patientService] Error calculating medical license expiration date:', error);
     }
   }
 
@@ -70,7 +103,7 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
     lastname: (rowData.lastname || '').toString(),
     firstname: (rowData.firstname || '').toString(),
     middlename: rowData.middlename ? rowData.middlename.toString() : undefined,
-    mmj_card: (rowData.licensenum || '').toString(),
+    mmj_card: (rowData.redcard || '').toString(),
     mmj_card_expiration: rawExpirationDate,
     birthdate: birthDate,
     address1: (rowData.address1 || '').toString(),
@@ -94,6 +127,13 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
     renewal_status: undefined,
     license_photo_url: undefined,
     email_marketing_status: undefined,
+    // Campos de licencia de paciente médica
+    redcard: rowData.redcard || undefined,
+    redcardmonth: rowData.redcardmonth || undefined,
+    redcardday: rowData.redcardday || undefined,
+    redcardyear: rowData.redcardyear || undefined,
+    redcardtime: rowData.redcardtime || undefined, // Timestamp de procesamiento de licencia médica
+    license_exp_date: rawExpirationDate || undefined,
   };
 
   return patient;
@@ -116,6 +156,7 @@ export async function fetchPatients(options = {}) {
       birthmonth, birthday, birthyear,
       phone, email, cell, address1, address2, city, state, zip,
       licensenum, licenseexpmonth, licenseexpyear,
+      redcard, redcardmonth, redcardday, redcardyear, redcardtime,
       createdate, modified_on_bt, deleted, location, ismember
     `, { count: 'exact' }) // Get total count with specific fields
     .eq('deleted', 0) // Only non-deleted customers
@@ -127,48 +168,11 @@ export async function fetchPatients(options = {}) {
   // Apply search filter if provided
   if (searchTerm) {
     const term = searchTerm.toLowerCase();
-    query = query.or(`firstname.ilike.%${term}%,lastname.ilike.%${term}%,email.ilike.%${term}%,licensenum.ilike.%${term}%,cell.ilike.%${term}%,phone.ilike.%${term}%`);
+    query = query.or(`firstname.ilike.%${term}%,lastname.ilike.%${term}%,email.ilike.%${term}%,redcard.ilike.%${term}%,cell.ilike.%${term}%,phone.ilike.%${term}%`);
   }
 
-  // Apply expiration filter if provided - using calculated dates from licenseexpyear/month
-  if (expirationFilter) {
-    const today = new Date();
-    const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth() + 1;
-    
-    switch (expirationFilter) {
-      case '30days':
-        const in30Days = addDays(today, 30);
-        const target30Year = in30Days.getFullYear();
-        const target30Month = in30Days.getMonth() + 1;
-        query = query.gte('licenseexpyear', currentYear.toString())
-                    .gte('licenseexpmonth', currentMonth.toString())
-                    .lte('licenseexpyear', target30Year.toString())
-                    .lte('licenseexpmonth', target30Month.toString());
-        break;
-      case '60days':
-        const in60Days = addDays(today, 60);
-        const target60Year = in60Days.getFullYear();
-        const target60Month = in60Days.getMonth() + 1;
-        query = query.gte('licenseexpyear', currentYear.toString())
-                    .gte('licenseexpmonth', currentMonth.toString())
-                    .lte('licenseexpyear', target60Year.toString())
-                    .lte('licenseexpmonth', target60Month.toString());
-        break;
-      case '90days':
-        const in90Days = addDays(today, 90);
-        const target90Year = in90Days.getFullYear();
-        const target90Month = in90Days.getMonth() + 1;
-        query = query.gte('licenseexpyear', currentYear.toString())
-                    .gte('licenseexpmonth', currentMonth.toString())
-                    .lte('licenseexpyear', target90Year.toString())
-                    .lte('licenseexpmonth', target90Month.toString());
-        break;
-      case 'expired':
-        query = query.or(`licenseexpyear.lt.${currentYear},and(licenseexpyear.eq.${currentYear},licenseexpmonth.lt.${currentMonth})`);
-        break;
-    }
-  }
+  // Note: We'll apply expiration filtering after transforming the data
+  // since we need to calculate the actual expiration dates first
 
   // Apply location filter if provided
   if (locationFilter) {
@@ -296,8 +300,139 @@ export async function fetchPatients(options = {}) {
     .map(row => transformSupabaseRowToPatient(row))
     .filter(patient => patient !== null) as Patient[];
 
+  // Apply expiration filtering after calculating the actual expiration dates
+  let filteredPatients = transformedPatients;
+  
+  // UPDATED: By default, hide expired patients unless specifically requested
+  if (!expirationFilter || expirationFilter === 'all') {
+    // Default: Show only non-expired patients (days_to_expiration >= 0)
+    filteredPatients = transformedPatients.filter(patient => {
+      if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
+        return patient.days_to_expiration >= 0; // Only show patients with 0 or more days left
+      }
+      // If no valid days_to_expiration, check the actual date
+      if (patient.license_exp_date) {
+        const expirationDate = new Date(patient.license_exp_date);
+        const today = new Date();
+        return expirationDate >= today;
+      }
+      return false; // Exclude patients without valid expiration data
+    });
+    console.log(`[patientService] Default filter applied (non-expired only): ${filteredPatients.length} patients out of ${transformedPatients.length} total`);
+  } else {
+    // Apply specific expiration filters
+    switch (expirationFilter) {
+      case '1to60days':
+        filteredPatients = transformedPatients.filter(patient => {
+          if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
+            return patient.days_to_expiration >= 1 && patient.days_to_expiration <= 60;
+          }
+          return false;
+        });
+        break;
+      case '61to120days':
+        filteredPatients = transformedPatients.filter(patient => {
+          if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
+            return patient.days_to_expiration >= 61 && patient.days_to_expiration <= 120;
+          }
+          return false;
+        });
+        break;
+      case '120plusdays':
+        filteredPatients = transformedPatients.filter(patient => {
+          if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
+            return patient.days_to_expiration > 120;
+          }
+          return false;
+        });
+        break;
+      case 'expired':
+        filteredPatients = transformedPatients.filter(patient => {
+          if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
+            return patient.days_to_expiration < 0;
+          }
+          // Fallback to date comparison if days_to_expiration not available
+          if (patient.license_exp_date) {
+            const expirationDate = new Date(patient.license_exp_date);
+            const today = new Date();
+            return expirationDate < today;
+          }
+          return false;
+        });
+        break;
+      case 'expiring_today':
+        filteredPatients = transformedPatients.filter(patient => {
+          if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
+            return patient.days_to_expiration === 0;
+          }
+          return false;
+        });
+        break;
+    }
+    
+    console.log(`[patientService] Expiration filter '${expirationFilter}' applied: ${filteredPatients.length} patients out of ${transformedPatients.length} total`);
+  }
+
+  // UPDATED: Sort patients by urgency - closest to expiring first (0 days, 1 day, 2 days, etc.)
+  filteredPatients.sort((a, b) => {
+    // If both have valid days_to_expiration
+    if (a.days_to_expiration !== undefined && a.days_to_expiration !== -9999 && 
+        b.days_to_expiration !== undefined && b.days_to_expiration !== -9999) {
+      
+      // For non-expired patients, sort by closest to expiring first (0, 1, 2, 3, etc.)
+      if (a.days_to_expiration >= 0 && b.days_to_expiration >= 0) {
+        return a.days_to_expiration - b.days_to_expiration;
+      }
+      
+      // For expired patients (when shown), sort by most recently expired first (closest to 0)
+      if (a.days_to_expiration < 0 && b.days_to_expiration < 0) {
+        return b.days_to_expiration - a.days_to_expiration; // -1, -2, -3, etc.
+      }
+      
+      // Non-expired always comes before expired (but expired are hidden by default anyway)
+      if (a.days_to_expiration >= 0 && b.days_to_expiration < 0) return -1;
+      if (a.days_to_expiration < 0 && b.days_to_expiration >= 0) return 1;
+    }
+    
+    // Fallback to license_exp_date if days_to_expiration not available
+    if (a.license_exp_date && b.license_exp_date) {
+      const aExpiration = new Date(a.license_exp_date);
+      const bExpiration = new Date(b.license_exp_date);
+      const today = new Date();
+      
+      // For non-expired dates, sort by closest to expiring first
+      if (aExpiration >= today && bExpiration >= today) {
+        return aExpiration.getTime() - bExpiration.getTime();
+      }
+      
+      // For expired dates, sort by most recently expired first
+      if (aExpiration < today && bExpiration < today) {
+        return bExpiration.getTime() - aExpiration.getTime();
+      }
+      
+      // Non-expired before expired
+      if (aExpiration >= today && bExpiration < today) return -1;
+      if (aExpiration < today && bExpiration >= today) return 1;
+    }
+    
+    // If only one has expiration date, prioritize the one with date
+    if (a.license_exp_date && !b.license_exp_date) return -1;
+    if (!a.license_exp_date && b.license_exp_date) return 1;
+    
+    // If neither has expiration date, maintain original order
+    return 0;
+  });
+  
+  console.log(`[patientService] Sorted ${filteredPatients.length} patients by expiration urgency (closest to expiring first)`);
+  if (filteredPatients.length > 0) {
+    console.log(`[patientService] First patient expires in: ${filteredPatients[0].days_to_expiration} days (${filteredPatients[0].firstname} ${filteredPatients[0].lastname})`);
+    if (filteredPatients.length > 1) {
+      console.log(`[patientService] Last patient expires in: ${filteredPatients[filteredPatients.length - 1].days_to_expiration} days`);
+    }
+  }
+
   return { 
-    patients: transformedPatients, 
+    patients: filteredPatients, 
     totalCount: count || 0 
   };
 }
