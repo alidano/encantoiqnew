@@ -31,8 +31,6 @@ import {
   Zap, 
   ClipboardList,
   FlaskConical,
-  MessageSquare,
-  Activity,
   MessageCircle, // New icon for WATI chat
   Database, // Icon for sync functionality
 } from "lucide-react";
@@ -73,11 +71,9 @@ const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tooltip: "Dashboard" },
   { href: "/patients", label: "Patients", icon: Users, tooltip: "Patients" },
   { href: "/admin/submissions", label: "Submissions", icon: ClipboardList, tooltip: "Submissions" },
-  { href: "/admin/notes-timeline", label: "Notes Timeline", icon: Activity, tooltip: "View Patient Notes Timeline" },
   { href: "/admin/sync", label: "BioTrack Sync", icon: Database, tooltip: "Synchronize data from BioTrack" },
   { href: "/automations", label: "Automations", icon: Zap, tooltip: "Automations" },
   { href: "/communications", label: "Communications", icon: Phone, tooltip: "Communication Management" },
-  { href: "/chat", label: "Chat Inbox", icon: MessageSquare, tooltip: "General Chat Inbox" },
   { href: "/chat/wati", label: "WhatsApp", icon: MessageCircle, tooltip: "WATI WhatsApp Chat" },
   { href: "/reports", label: "Reports", icon: BarChartBig, tooltip: "Reports" },
   { href: "/patients/demo", label: "Demo Patient AI", icon: FlaskConical, tooltip: "Demo Patient AI" },
@@ -97,7 +93,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const filteredNavItems = navItems.filter(item => {
     // Only show admin-only routes to admin users
     const adminOnlyPages = [
-      '/admin/notes-timeline',
       '/admin/sync',
       '/automations',
       '/communications',

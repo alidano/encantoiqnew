@@ -497,13 +497,10 @@ export async function fetchAllPatientNotes(): Promise<Note[]> {
     .from('patient_notes')
     .select(`
       *,
-      customer:customers!patient_id(
+      customer:customers!customer_id(
         customerid,
         firstname,
         lastname
-      ),
-      user:users(
-        displayName
       )
     `)
     .order('created_at', { ascending: false });
@@ -517,6 +514,11 @@ export async function fetchAllPatientNotes(): Promise<Note[]> {
     ...note,
     id: note.id.toString(),
     created_at: note.created_at,
+    patient: note.customer ? {
+      id: parseInt(note.customer.customerid),
+      firstname: note.customer.firstname || '',
+      lastname: note.customer.lastname || ''
+    } : undefined
   })) as Note[];
 }
 
@@ -1509,7 +1511,7 @@ export async function fetchAllCallLogs(limit: number = 20): Promise<CallLog[]> {
     .from('call_logs')
     .select(`
       *,
-      customer:customers!patient_id(
+      customer:customers!customer_id(
         customerid,
         firstname,
         lastname,
@@ -1529,7 +1531,13 @@ export async function fetchAllCallLogs(limit: number = 20): Promise<CallLog[]> {
     ...log,
     id: log.id.toString(),
     created_at: log.created_at,
-    customer: log.customer // This will include the joined customer data
+    patient: log.customer ? {
+      id: parseInt(log.customer.customerid),
+      firstname: log.customer.firstname || '',
+      lastname: log.customer.lastname || '',
+      email: log.customer.email || '',
+      cell: log.customer.cell || ''
+    } : undefined
   })) as CallLog[];
 }
 
