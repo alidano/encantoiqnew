@@ -5,12 +5,12 @@ import AppLayout from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowLeft, Loader2, AlertTriangle, UserCircle, Mail, Phone, CalendarDays, MapPin, Briefcase, Landmark, DollarSign, Edit, ClipboardPlus, FileImage, History, Star, MessageSquare, PhoneCall, Calendar, AlertCircle, RefreshCw, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { ArrowLeft, Loader2, AlertTriangle, UserCircle, Mail, Phone, CalendarDays, MapPin, Briefcase, Landmark, DollarSign, Edit, FileImage, History, Star, MessageSquare, PhoneCall, Calendar, AlertCircle, RefreshCw, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { useParams } from 'next/navigation';
-import { fetchPatientById, fetchNotesByPatientId, addPatientNote, uploadLicensePhoto, updatePatientLicensePhotoUrl, fetchSubmissionsForPatient, fetchCallLogsByPatientId, addCallLog, fetchCallOutcomeTypes, type CallLog, type CallOutcomeType } from '@/services/patientService';
-import type { Patient, Note, LicenseSubmission } from '@/types';
+import { fetchPatientById, fetchSubmissionsForPatient, fetchCallLogsByPatientId, addCallLog, fetchCallOutcomeTypes, type CallLog, type CallOutcomeType } from '@/services/patientService';
+import type { Patient, LicenseSubmission } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { format, parseISO, isValid } from 'date-fns';
 import { Textarea } from '@/components/ui/textarea';
@@ -25,17 +25,11 @@ import PatientChatHistory from '@/components/PatientChatHistory'; // Adjust path
 export default function PatientDetailPage() {
   const params = useParams();
   const { toast } = useToast();
-  const patientId = typeof params.id === 'string' ? parseInt(params.id, 10) : null;
+  const patientId = typeof params.id === 'string' ? params.id : null;
 
   const [patient, setPatient] = React.useState<Patient | null>(null);
   const [isLoadingPatient, setIsLoadingPatient] = React.useState(true);
   const [patientError, setPatientError] = React.useState<string | null>(null);
-
-  const [patientNotes, setPatientNotes] = React.useState<Note[]>([]);
-  const [newNoteText, setNewNoteText] = React.useState('');
-  const [isLoadingNotes, setIsLoadingNotes] = React.useState(false);
-  const [notesError, setNotesError] = React.useState<string | null>(null);
-  const [isAddingNote, setIsAddingNote] = React.useState(false);
 
   const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
   const [isUploading, setIsUploading] = React.useState(false);
@@ -63,7 +57,7 @@ export default function PatientDetailPage() {
   const [callOutcomeTypes, setCallOutcomeTypes] = React.useState<CallOutcomeType[]>([]);
 
   const loadPatientData = React.useCallback(async () => {
-    if (patientId === null || isNaN(patientId)) {
+    if (!patientId) {
       setPatientError("Invalid patient ID.");
       setIsLoadingPatient(false);
       return;
@@ -86,21 +80,6 @@ export default function PatientDetailPage() {
       console.error(e);
     } finally {
       setIsLoadingPatient(false);
-    }
-  }, [patientId]);
-
-  const loadNotes = React.useCallback(async () => {
-    if (patientId === null || isNaN(patientId)) return;
-    setIsLoadingNotes(true);
-    setNotesError(null);
-    try {
-      const notes = await fetchNotesByPatientId(patientId);
-      setPatientNotes(notes);
-    } catch (e) {
-      setNotesError("Failed to load patient notes.");
-      console.error(e);
-    } finally {
-      setIsLoadingNotes(false);
     }
   }, [patientId]);
 
@@ -208,11 +187,18 @@ export default function PatientDetailPage() {
   };
 
   const loadCallLogs = React.useCallback(async () => {
-    if (patientId === null || isNaN(patientId)) return;
+    if (!patientId) return;
+    
+    // Convert string patientId to number for legacy tables
+    const numericPatientId = parseInt(patientId, 10);
+    if (isNaN(numericPatientId)) {
+      console.warn('[PatientDetailPage] Cannot convert patientId to number for call logs:', patientId);
+      return;
+    }
     setIsLoadingCallLogs(true);
     setCallLogsError(null);
     try {
-      const logs = await fetchCallLogsByPatientId(patientId);
+      const logs = await fetchCallLogsByPatientId(numericPatientId);
       setCallLogs(logs);
     } catch (e) {
       setCallLogsError("Failed to load call logs.");
@@ -233,39 +219,27 @@ export default function PatientDetailPage() {
 
   React.useEffect(() => {
     loadPatientData();
-    loadNotes();
     loadCallLogs();
     loadCallOutcomeTypes();
-  }, [patientId, loadPatientData, loadNotes, loadCallLogs, loadCallOutcomeTypes]);
-
-  const handleAddNote = async () => {
-    if (!patientId || !newNoteText.trim()) {
-      toast({ variant: "destructive", title: "Error", description: "Note content cannot be empty." });
-      return;
-    }
-    setIsAddingNote(true);
-    try {
-      await addPatientNote(patientId, newNoteText);
-      setNewNoteText('');
-      toast({ title: "Note Added", description: "Patient note saved successfully." });
-      loadNotes(); 
-    } catch (error) {
-      console.error("Failed to add note:", error);
-      toast({ variant: "destructive", title: "Error", description: "Could not save note. Please try again." });
-    } finally {
-      setIsAddingNote(false);
-    }
-  };
+  }, [patientId, loadPatientData, loadCallLogs, loadCallOutcomeTypes]);
 
   const handleAddCallLog = async () => {
     if (!patientId || !newCallOutcome) {
       toast({ variant: "destructive", title: "Error", description: "Call outcome is required." });
       return;
     }
+    
+    // Convert string patientId to number for legacy tables
+    const numericPatientId = parseInt(patientId, 10);
+    if (isNaN(numericPatientId)) {
+      toast({ variant: "destructive", title: "Error", description: "Invalid patient ID." });
+      return;
+    }
+    
     setIsAddingCallLog(true);
     try {
       await addCallLog(
-        patientId, 
+        numericPatientId, 
         newCallOutcome, 
         newCallNotes.trim() || undefined,
         undefined, // removed call duration
@@ -297,10 +271,18 @@ export default function PatientDetailPage() {
       toast({ variant: "destructive", title: "Error", description: "Please select a file to upload." });
       return;
     }
+    
+    // Convert string patientId to number for legacy functions
+    const numericPatientId = parseInt(patientId, 10);
+    if (isNaN(numericPatientId)) {
+      toast({ variant: "destructive", title: "Error", description: "Invalid patient ID." });
+      return;
+    }
+    
     setIsUploading(true);
     try {
-      const photoUrl = await uploadLicensePhoto(patientId, selectedFile);
-      await updatePatientLicensePhotoUrl(patientId, photoUrl);
+      const photoUrl = await uploadLicensePhoto(numericPatientId, selectedFile);
+      await updatePatientLicensePhotoUrl(numericPatientId, photoUrl);
       
       setPatient(prev => prev ? { ...prev, license_photo_url: photoUrl } : null);
 
@@ -434,6 +416,32 @@ export default function PatientDetailPage() {
             <Button><Edit className="mr-2 h-4 w-4" /> Edit Patient</Button>
           </div>
           <p className="text-muted-foreground">Patient ID: {patient.id}</p>
+          
+          {/* License Expiration Alert */}
+          {patient.days_to_expiration !== undefined && patient.days_to_expiration <= 30 && (
+            <div className={`mt-4 p-4 rounded-lg border-2 ${
+              patient.days_to_expiration <= 0 ? 'bg-red-50 border-red-200 text-red-800' :
+              patient.days_to_expiration <= 7 ? 'bg-orange-50 border-orange-200 text-orange-800' :
+              'bg-yellow-50 border-yellow-200 text-yellow-800'
+            }`}>
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="h-6 w-6" />
+                <div>
+                  <h3 className="font-semibold text-lg">
+                    {patient.days_to_expiration <= 0 ? 'EXPIRED LICENSE' :
+                     patient.days_to_expiration <= 7 ? 'CRITICAL: License Expiring Soon' :
+                     'License Renewal Reminder'}
+                  </h3>
+                  <p>
+                    {patient.days_to_expiration <= 0 
+                      ? `License expired ${Math.abs(patient.days_to_expiration)} days ago. Urgent renewal needed!`
+                      : `License expires in ${patient.days_to_expiration} days (${formatDateSafe(patient.license_exp_date)})`
+                    }
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="grid md:grid-cols-3 gap-6">
@@ -444,8 +452,22 @@ export default function PatientDetailPage() {
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <div><span className="font-medium text-muted-foreground">Full Name:</span> {patient.firstname} {patient.middlename || ''} {patient.lastname}</div>
               <div><span className="font-medium text-muted-foreground">Birthdate:</span> {formatDateSafe(patient.birthdate)}</div>
-              <div><span className="font-medium text-muted-foreground">Email:</span> {patient.email}</div>
-              <div><span className="font-medium text-muted-foreground">Cell Phone:</span> {patient.cell}</div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-muted-foreground">Email:</span> 
+                {patient.email ? (
+                  <a href={`mailto:${patient.email}`} className="text-blue-600 hover:underline">{patient.email}</a>
+                ) : (
+                  <span className="text-red-500">No email available</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-muted-foreground">Cell Phone:</span> 
+                {patient.cell ? (
+                  <a href={`tel:${patient.cell}`} className="text-blue-600 hover:underline font-mono">{patient.cell}</a>
+                ) : (
+                  <span className="text-red-500">No phone available</span>
+                )}
+              </div>
               <div><span className="font-medium text-muted-foreground">Address:</span> {patient.address1}, {patient.city}, {patient.state} {patient.zip}</div>
               <div>
                 <span className="font-medium text-muted-foreground">Email Opt-in:</span> 
@@ -607,13 +629,15 @@ export default function PatientDetailPage() {
             </Card>
         </div>
 
-        {/* Call Logs Card */}
-        <Card>
-          <CardHeader>
+        {/* Call Logs Card - Enhanced for License Renewal Workflow */}
+        <Card className="border-primary/20">
+          <CardHeader className="bg-primary/5">
             <CardTitle className="flex items-center gap-2">
-              <PhoneCall className="h-5 w-5 text-primary"/> Call Logs
+              <PhoneCall className="h-5 w-5 text-primary"/> License Renewal Call Management
             </CardTitle>
-            <CardDescription>Track call outcomes and follow-ups for this patient.</CardDescription>
+            <CardDescription>
+              Track call outcomes and follow-ups for license renewal process. Use this to log all attempts to contact the patient about their expiring medical license.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-muted/30 rounded-lg">
@@ -864,54 +888,6 @@ export default function PatientDetailPage() {
           patientPhone={patient?.cell || ''} 
           patientName={patient ? `${patient.firstname} ${patient.lastname}` : 'Unknown Patient'}
         />
-        
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2"><ClipboardPlus className="h-5 w-5 text-primary"/> Patient Notes</CardTitle>
-            <CardDescription>Add and view notes related to this patient.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label htmlFor="new-note">Add New Note</Label>
-              <Textarea 
-                id="new-note" 
-                value={newNoteText}
-                onChange={(e) => setNewNoteText(e.target.value)}
-                placeholder="Enter note details here..."
-                rows={3}
-                className="mt-1"
-              />
-              <Button onClick={handleAddNote} disabled={isAddingNote || !newNoteText.trim()} className="mt-2">
-                {isAddingNote ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Add Note
-              </Button>
-            </div>
-            
-            <div className="space-y-3">
-              <h3 className="text-md font-semibold">Notes History</h3>
-              {isLoadingNotes ? (
-                <div className="flex items-center text-muted-foreground">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading notes...
-                </div>
-              ) : notesError ? (
-                <div className="text-destructive flex items-center gap-1"><AlertTriangle className="h-4 w-4"/> {notesError}</div>
-              ) : patientNotes.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No notes available for this patient.</p>
-              ) : (
-                <ul className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                  {patientNotes.map(note => (
-                    <li key={note.id} className="p-3 bg-muted/50 rounded-md text-sm border">
-                      <p className="whitespace-pre-wrap">{note.note_content}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {formatDateSafe(note.created_at, true)}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </CardContent>
-        </Card>
 
       </div>
     </AppLayout>

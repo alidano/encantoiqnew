@@ -21,20 +21,17 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
     licenseexpmonth: rowData.licenseexpmonth
   });
   
-  // Convert customerid to number if needed
-  let customerId = rowData.customerid;
-  if (typeof customerId === 'string') {
-    customerId = parseInt(customerId, 10);
-  }
-  
-  if (!customerId || isNaN(customerId) || typeof customerId !== 'number') {
-    console.error('[patientService] Invalid customerid after conversion:', {
+  // Validate customerid exists
+  if (!rowData.customerid) {
+    console.error('[patientService] Missing customerid:', {
       original: rowData.customerid,
-      converted: customerId,
-      type: typeof customerId
+      type: typeof rowData.customerid
     });
     return null;
   }
+  
+  // Keep customerid as string to maintain consistency
+  const customerId = rowData.customerid.toString();
 
   // CALCULATE license_exp_date from redcardyear and redcardmonth (licencia médica)
   let rawExpirationDate = '';
@@ -98,7 +95,7 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
   const memberStatus = rowData.ismember ? 'Member' : 'Non-Member';
 
   const patient: Patient = {
-    id: customerId, // Use the converted customerid
+    id: customerId, // Use customerid as string for consistency
     days_to_expiration: days_to_expiration,
     lastname: (rowData.lastname || '').toString(),
     firstname: (rowData.firstname || '').toString(),
@@ -214,19 +211,11 @@ export async function fetchPatients(options = {}) {
       return false;
     }
     
-    // Try to convert customerid to number if it's a string
-    let customerId = row.customerid;
-    if (typeof customerId === 'string') {
-      customerId = parseInt(customerId, 10);
-    }
-    
-    if (!customerId || isNaN(customerId)) {
-      console.warn(`[patientService] Invalid customerid:`, {
+    // Just validate that customerid exists - don't convert to number
+    if (!row.customerid) {
+      console.warn(`[patientService] Missing customerid:`, {
         original: row.customerid,
-        originalType: typeof row.customerid,
-        converted: customerId,
-        convertedType: typeof customerId,
-        isNaN: isNaN(customerId),
+        type: typeof row.customerid,
         rowSample: {
           firstname: row.firstname,
           lastname: row.lastname,
@@ -237,12 +226,19 @@ export async function fetchPatients(options = {}) {
       return false;
     }
     
-    // Update the row with converted customerid
-    row.customerid = customerId;
     return true;
   });
 
   console.log(`[patientService] After filtering: ${validData.length} valid customers out of ${data.length} fetched.`);
+  
+  // Debug: Log some sample customerid values to verify they're being preserved correctly
+  if (validData.length > 0) {
+    console.log('[patientService] Sample customerid values:', validData.slice(0, 3).map(row => ({
+      customerid: row.customerid,
+      type: typeof row.customerid,
+      name: `${row.firstname} ${row.lastname}`
+    })));
+  }
   
   // Show sample of what we got
   if (data.length > 0) {
@@ -437,31 +433,40 @@ export async function fetchPatients(options = {}) {
   };
 }
 
-export async function fetchPatientById(id: number): Promise<Patient | null> {
-  if (isNaN(id)) {
+export async function fetchPatientById(id: string | number): Promise<Patient | null> {
+  if (!id) {
      console.error("[patientService] Invalid customer ID provided to fetchPatientById:", id);
      return null;
   }
+  
+  // Convert ID to string since customerid is stored as character varying in DB
+  const customerIdToSearch = typeof id === 'number' ? id.toString() : id;
+  
+  console.log(`[patientService] Searching for customer with ID: ${customerIdToSearch} (original: ${id}, type: ${typeof id})`);
+  
   const { data, error } = await supabase
     .from('customers')
     .select('*')
-    .eq('customerid', id) // Changed from 'id' to 'customerid'
+    .eq('customerid', customerIdToSearch) // Search by customerid as string
     .eq('deleted', 0) // Only non-deleted customers
     .limit(1)
     .single();
 
   if (error) {
     if (error.code === 'PGRST116' && error.message.includes('0 rows')) { // PGRST116: "The result contains 0 rows"
+        console.log(`[patientService] Customer with ID ${customerIdToSearch} not found (this is normal if ID doesn't exist)`);
         return null;
     }
-    console.error(`[patientService] Error fetching customer with id ${id} from Supabase: `, error);
-    throw new Error(`Failed to fetch customer with id ${id} from database.`);
+    console.error(`[patientService] Error fetching customer with id ${customerIdToSearch} from Supabase: `, error);
+    throw new Error(`Failed to fetch customer with id ${customerIdToSearch} from database.`);
   }
 
   if (!data) {
+    console.log(`[patientService] No data returned for customer ID ${customerIdToSearch}`);
     return null;
   }
 
+  console.log(`[patientService] Successfully found customer: ${data.firstname} ${data.lastname} (customerid: ${data.customerid})`);
   return transformSupabaseRowToPatient(data);
 }
 

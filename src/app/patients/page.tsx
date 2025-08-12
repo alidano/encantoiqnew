@@ -36,7 +36,7 @@ const PatientsPage = () => {
     expirationRange: 'all',
     location: 'all'
   });
-  const [selectedRows, setSelectedRows] = React.useState<number[]>([]);
+  const [selectedRows, setSelectedRows] = React.useState<(string | number)[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [currentPage, setCurrentPage] = React.useState(1);
@@ -136,7 +136,7 @@ const PatientsPage = () => {
     }
   };
 
-  const handleSelectRow = (id: number, checked: boolean | string) => {
+  const handleSelectRow = (id: string | number, checked: boolean | string) => {
     if (checked === true) {
       setSelectedRows(prev => [...prev, id]);
     } else {

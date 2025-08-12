@@ -2,7 +2,7 @@
 
 // Your existing Patient interface (keep as is)
 export interface Patient {
-  id: number;
+  id: string; // Customer ID from customers table (stored as VARCHAR)
   days_to_expiration: number;
   lastname: string;
   firstname: string;
