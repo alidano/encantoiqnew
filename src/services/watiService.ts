@@ -1,5 +1,5 @@
 /**
- * WATI WhatsApp Service - Client-Side API Wrapper
+ * WATI WhatsApp Service - Client-Side API Wrapper with Direct API Calls
  * File Path: src/services/watiService.ts
  * 
  * This service handles WATI WhatsApp functionality from the client-side
@@ -11,6 +11,81 @@
 
 // Client-side service that calls our server-side API routes
 // No direct access to WATI environment variables needed here
+
+/**
+ * Fetches contacts/conversations directly from WATI API
+ * 
+ * @returns Promise<any[]> Array of conversations
+ */
+export async function fetchWatiContacts(): Promise<any[]> {
+  try {
+    console.log('[WATI Service] Fetching contacts from WATI API...');
+
+    const response = await fetch('/api/wati/get-contacts', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const responseData = await response.json();
+
+    if (!response.ok) {
+      console.error('[WATI Service] Failed to fetch contacts:', responseData);
+      throw new Error(responseData.error || 'Failed to fetch contacts');
+    }
+
+    if (!responseData.success) {
+      console.error('[WATI Service] WATI API returned error:', responseData);
+      throw new Error(responseData.error || 'WATI API error');
+    }
+
+    console.log(`[WATI Service] Fetched ${responseData.data?.length || 0} contacts successfully`);
+    return responseData.data || [];
+
+  } catch (error) {
+    console.error('[WATI Service] Error fetching contacts:', error);
+    throw error;
+  }
+}
+
+/**
+ * Fetches messages for a specific WhatsApp number from WATI API
+ * 
+ * @param whatsappNumber - The WhatsApp number to fetch messages for
+ * @returns Promise<any[]> Array of messages
+ */
+export async function fetchWatiMessages(whatsappNumber: string): Promise<any[]> {
+  try {
+    console.log(`[WATI Service] Fetching messages for ${whatsappNumber}...`);
+
+    const response = await fetch(`/api/wati/get-messages?whatsappNumber=${encodeURIComponent(whatsappNumber)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const responseData = await response.json();
+
+    if (!response.ok) {
+      console.error('[WATI Service] Failed to fetch messages:', responseData);
+      throw new Error(responseData.error || 'Failed to fetch messages');
+    }
+
+    if (!responseData.success) {
+      console.error('[WATI Service] WATI API returned error:', responseData);
+      throw new Error(responseData.error || 'WATI API error');
+    }
+
+    console.log(`[WATI Service] Fetched ${responseData.data?.length || 0} messages successfully`);
+    return responseData.data || [];
+
+  } catch (error) {
+    console.error('[WATI Service] Error fetching messages:', error);
+    throw error;
+  }
+}
 
 /**
  * Sends a text message to a WhatsApp number via our server-side WATI API

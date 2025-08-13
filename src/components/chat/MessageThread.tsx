@@ -18,9 +18,18 @@ export default function MessageThread({ conversation, messages, isLoading }: Mes
   const messagesEndRef = React.useRef<HTMLDivElement | null>(null);
   const [newMessage, setNewMessage] = React.useState('');
 
+  // Sort messages by timestamp to ensure proper chat order (oldest first, newest last)
+  const sortedMessages = React.useMemo(() => {
+    return [...messages].sort((a, b) => {
+      const timeA = new Date(a.timestamp).getTime();
+      const timeB = new Date(b.timestamp).getTime();
+      return timeA - timeB; // Ascending order (oldest first)
+    });
+  }, [messages]);
+
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [sortedMessages]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,12 +63,12 @@ export default function MessageThread({ conversation, messages, isLoading }: Mes
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <span className="ml-2">Loading messages...</span>
           </div>
-        ) : messages.length === 0 ? (
+        ) : sortedMessages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             No messages in this conversation yet.
           </div>
         ) : (
-          messages.map(msg => (
+          sortedMessages.map(msg => (
             <MessageBubble key={msg.message_id} message={msg} />
           ))
         )}

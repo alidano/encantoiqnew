@@ -16,7 +16,6 @@
 
 import * as React from 'react';
 import AppLayout from "@/components/layout/AppLayout";
-import { fetchConversationsWithLastMessageFallback, fetchMessages } from '@/services/chatService';
 import type { ChatConversation, ChatMessage } from '@/types';
 import ConversationListItem from '@/components/chat/ConversationListItem';
 import MessageThread from '@/components/chat/MessageThread';
@@ -24,7 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Loader2, Search, MessageSquare, AlertTriangle, MessageCircle } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { sendTextMessage } from '@/services/watiService';
+import { fetchWatiContacts, fetchWatiMessages, sendTextMessage } from '@/services/watiService';
 
 export default function WatiChatPage() {
   const [conversations, setConversations] = React.useState<ChatConversation[]>([]);
@@ -47,18 +46,17 @@ export default function WatiChatPage() {
       setIsLoadingConversations(true);
       setError(null);
       try {
-        // Fetch all conversations and filter for WATI ones
-        const fetchedConversations = await fetchConversationsWithLastMessageFallback();
+        console.log('[WATI Chat] Loading conversations directly from WATI API...');
         
-        // Filter for WATI conversations (sending_server_id = 2)
-        const watiConversations = fetchedConversations.filter(conv => 
-          conv.sending_server_id === 2
-        );
+        // Fetch conversations directly from WATI API
+        const watiContacts = await fetchWatiContacts();
         
-        setConversations(watiConversations);
+        console.log(`[WATI Chat] Found ${watiContacts.length} contacts from WATI`);
+        setConversations(watiContacts);
+        
       } catch (e) {
-        console.error(e);
-        setError("Failed to load WATI conversations.");
+        console.error('[WATI Chat] Error loading WATI conversations:', e);
+        setError("Failed to load WhatsApp conversations from WATI.");
       } finally {
         setIsLoadingConversations(false);
       }
@@ -71,17 +69,18 @@ export default function WatiChatPage() {
     setIsLoadingMessages(true);
     setError(null);
     setMessages([]);
+    
     try {
-      const fetchedMessages = await fetchMessages(conversation.conversation_id);
+      console.log(`[WATI Chat] Loading messages for ${conversation.sender_number}...`);
       
-      // Filter for WATI messages only
-      const watiMessages = fetchedMessages.filter(msg => 
-        msg.sending_server_id === 2
-      );
+      // Fetch messages directly from WATI API
+      const watiMessages = await fetchWatiMessages(conversation.sender_number);
       
+      console.log(`[WATI Chat] Found ${watiMessages.length} messages from WATI`);
       setMessages(watiMessages);
+      
     } catch (e) {
-      console.error(e);
+      console.error('[WATI Chat] Error loading messages:', e);
       setError(`Failed to load messages for ${conversation.contact_name}.`);
     } finally {
       setIsLoadingMessages(false);
