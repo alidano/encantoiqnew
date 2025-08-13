@@ -146,6 +146,12 @@ export async function fetchPatients(options = {}) {
     locationFilter = null
   } = options;
 
+  // UPDATED: For proper global sorting by expiration urgency, we need to:
+  // 1. Fetch ALL records that match filters
+  // 2. Calculate days_to_expiration for all
+  // 3. Sort globally by urgency
+  // 4. Apply pagination manually
+  
   let query = supabase
     .from('customers')
     .select(`
@@ -159,7 +165,7 @@ export async function fetchPatients(options = {}) {
     .eq('deleted', 0) // Only non-deleted customers
     .not('customerid', 'is', null) // Filter out null customerids
     .not('customerid', 'eq', '') // Filter out empty customerids
-    .order('lastname', { ascending: true })
+    .order('lastname', { ascending: true }) // Basic ordering for consistency
     .order('firstname', { ascending: true });
 
   // Apply search filter if provided
@@ -185,10 +191,8 @@ export async function fetchPatients(options = {}) {
     }
   }
 
-  // Apply pagination if limit is specified
-  if (limit) {
-    query = query.range(offset, offset + limit - 1);
-  }
+  // DON'T apply pagination yet - we need to sort first
+  // Apply limit later after sorting
 
   const { data, error, count } = await query;
 
@@ -202,7 +206,7 @@ export async function fetchPatients(options = {}) {
     return { patients: [], totalCount: 0 };
   }
 
-  console.log(`[patientService] fetchPatients: Fetched ${data.length} customers out of ${count} total.`);
+  console.log(`[patientService] fetchPatients: Fetched ${data.length} customers out of ${count} total for sorting.`);
 
   // Add debug logging for problematic records
   const validData = data.filter(row => {
@@ -299,22 +303,11 @@ export async function fetchPatients(options = {}) {
   // Apply expiration filtering after calculating the actual expiration dates
   let filteredPatients = transformedPatients;
   
-  // UPDATED: By default, hide expired patients unless specifically requested
+  // UPDATED: By default, show ALL patients (more inclusive filtering)
   if (!expirationFilter || expirationFilter === 'all') {
-    // Default: Show only non-expired patients (days_to_expiration >= 0)
-    filteredPatients = transformedPatients.filter(patient => {
-      if (patient.days_to_expiration !== undefined && patient.days_to_expiration !== -9999) {
-        return patient.days_to_expiration >= 0; // Only show patients with 0 or more days left
-      }
-      // If no valid days_to_expiration, check the actual date
-      if (patient.license_exp_date) {
-        const expirationDate = new Date(patient.license_exp_date);
-        const today = new Date();
-        return expirationDate >= today;
-      }
-      return false; // Exclude patients without valid expiration data
-    });
-    console.log(`[patientService] Default filter applied (non-expired only): ${filteredPatients.length} patients out of ${transformedPatients.length} total`);
+    // Default: Show ALL patients (don't filter by expiration unless specifically requested)
+    filteredPatients = transformedPatients; // No filtering - show everyone
+    console.log(`[patientService] Default filter applied (show all patients): ${filteredPatients.length} patients out of ${transformedPatients.length} total`);
   } else {
     // Apply specific expiration filters
     switch (expirationFilter) {
@@ -369,7 +362,12 @@ export async function fetchPatients(options = {}) {
     console.log(`[patientService] Expiration filter '${expirationFilter}' applied: ${filteredPatients.length} patients out of ${transformedPatients.length} total`);
   }
 
-  // UPDATED: Sort patients by urgency - closest to expiring first (0 days, 1 day, 2 days, etc.)
+  // TODO: Restore sorting by expiration urgency after confirming data is loading
+  // For now, patients will be sorted by lastname/firstname from the database query
+  // Once we confirm patients are loading, we'll re-implement the in-memory sorting
+  // to achieve the desired pagination with global expiration order
+  
+  // UPDATED: Sort patients globally by expiration urgency - closest to expiring first (0 days, 1 day, 2 days, etc.)
   filteredPatients.sort((a, b) => {
     // If both have valid days_to_expiration
     if (a.days_to_expiration !== undefined && a.days_to_expiration !== -9999 && 
@@ -419,17 +417,26 @@ export async function fetchPatients(options = {}) {
     return 0;
   });
   
-  console.log(`[patientService] Sorted ${filteredPatients.length} patients by expiration urgency (closest to expiring first)`);
+  console.log(`[patientService] Globally sorted ${filteredPatients.length} patients by expiration urgency (closest to expiring first)`);
   if (filteredPatients.length > 0) {
     console.log(`[patientService] First patient expires in: ${filteredPatients[0].days_to_expiration} days (${filteredPatients[0].firstname} ${filteredPatients[0].lastname})`);
-    if (filteredPatients.length > 1) {
-      console.log(`[patientService] Last patient expires in: ${filteredPatients[filteredPatients.length - 1].days_to_expiration} days`);
+    if (filteredPatients.length > 5) {
+      console.log(`[patientService] Last patient in sort expires in: ${filteredPatients[filteredPatients.length - 1].days_to_expiration} days`);
     }
+  }
+  
+  // NOW apply pagination manually after global sorting
+  let paginatedPatients = filteredPatients;
+  if (limit && limit > 0) {
+    const startIndex = offset;
+    const endIndex = offset + limit;
+    paginatedPatients = filteredPatients.slice(startIndex, endIndex);
+    console.log(`[patientService] Applied manual pagination: showing ${startIndex + 1}-${Math.min(endIndex, filteredPatients.length)} of ${filteredPatients.length} total`);
   }
 
   return { 
-    patients: filteredPatients, 
-    totalCount: count || 0 
+    patients: paginatedPatients, 
+    totalCount: filteredPatients.length // Use filtered count, not original DB count
   };
 }
 
