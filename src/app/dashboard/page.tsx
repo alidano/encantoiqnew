@@ -3,9 +3,9 @@
 import * as React from 'react';
 import AppLayout from "@/components/layout/AppLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { fetchDashboardExpirationCardStats, fetchMonthlyExpirationChartData, fetchLicenseSubmissionStats } from '@/services/patientService';
+import { fetchDashboardExpirationCardStats, fetchMonthlyExpirationChartData, fetchLicenseSubmissionStats, fetchCriticalExpirationStats, fetchTodayProcessingStats, fetchDispensaryPerformanceStats, fetchDispensaryPerformanceSummary } from '@/services/patientService';
 import { fetchChatDashboardMonthlyMetrics } from '@/services/chatService';
-import type { ExpirationDataPoint, SubmissionStats, MonthlyTrendItem, DashboardExpirationCardStats, MonthlyLocationBreakdown, ChatDashboardTodayMetrics, ChatStatusDistributionItem, ChartConfig as AppChartConfig } from '@/types'; // Renamed ChartConfig to AppChartConfig
+import type { ExpirationDataPoint, SubmissionStats, MonthlyTrendItem, DashboardExpirationCardStats, MonthlyLocationBreakdown, ChatDashboardTodayMetrics, ChatStatusDistributionItem, ChartConfig as AppChartConfig, CriticalExpirationStats, TodayProcessingStats, DispensaryPerformance } from '@/types'; // Renamed ChartConfig to AppChartConfig
 import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from "@/components/ui/chart";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, PieChart, Pie, Cell, LabelList } from 'recharts';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -77,6 +77,57 @@ export default function DashboardPage() {
   const [isLoadingLiveStats, setIsLoadingLiveStats] = React.useState(true);
   const [liveStatsError, setLiveStatsError] = React.useState<string | null>(null);
   
+  // NEW: Critical expiration stats
+  const [criticalStats, setCriticalStats] = React.useState<CriticalExpirationStats>({
+    expiringNext7Days: 0,
+    expiringNext48Hours: 0,
+    expiringToday: 0,
+    expiredYesterday: 0,
+  });
+  const [isLoadingCriticalStats, setIsLoadingCriticalStats] = React.useState(true);
+  const [criticalStatsError, setCriticalStatsError] = React.useState<string | null>(null);
+  
+  // NEW: Today's processing stats
+  const [todayStats, setTodayStats] = React.useState<TodayProcessingStats>({
+    renewalsCompletedToday: 0,
+    newLicensesProcessedToday: 0,
+    totalProcessedToday: 0,
+    pendingToday: 0,
+    renewalsSubmittedToday: 0,
+    newLicensesSubmittedToday: 0,
+    totalSubmittedToday: 0,
+    processingRatePercentage: 0,
+    inProgressSubmissionsToday: 0,
+    reviewSubmissionsToday: 0,
+    failedSubmissionsToday: 0
+  });
+  const [isLoadingTodayStats, setIsLoadingTodayStats] = React.useState(true);
+  const [todayStatsError, setTodayStatsError] = React.useState<string | null>(null);
+  
+  // NEW: Dispensary performance stats
+  const [dispensaryPerformance, setDispensaryPerformance] = React.useState<DispensaryPerformance[]>([]);
+  const [isLoadingDispensaryPerformance, setIsLoadingDispensaryPerformance] = React.useState(true);
+  const [dispensaryPerformanceError, setDispensaryPerformanceError] = React.useState<string | null>(null);
+  
+  // NEW: Dispensary performance summary
+  const [dispensaryPerformanceSummary, setDispensaryPerformanceSummary] = React.useState<{
+    totalDispensaries: number;
+    bestRenewalRate: number;
+    bestRenewalDispensary: string;
+    mostActiveCount: number;
+    mostActiveDispensary: string;
+    avgProcessingDaysOverall: number;
+    totalSubmissionsPeriod: number;
+    periodStart: string;
+    periodEnd: string;
+  }>({ 
+    totalDispensaries: 0, bestRenewalRate: 0, bestRenewalDispensary: 'N/A', 
+    mostActiveCount: 0, mostActiveDispensary: 'N/A', avgProcessingDaysOverall: 0,
+    totalSubmissionsPeriod: 0, periodStart: '', periodEnd: ''
+  });
+  const [isLoadingDispensaryPerformanceSummary, setIsLoadingDispensaryPerformanceSummary] = React.useState(true);
+  const [dispensaryPerformanceSummaryError, setDispensaryPerformanceSummaryError] = React.useState<string | null>(null);
+  
 
   
   const [expirationChartData, setExpirationChartData] = React.useState<ExpirationDataPoint[]>([]);
@@ -111,6 +162,16 @@ export default function DashboardPage() {
       setSubmissionStatsError(null);
       setIsLoadingChatMetrics(true);
       setChatMetricsError(null);
+      
+      // NEW: Initialize new loading states
+      setIsLoadingCriticalStats(true);
+      setCriticalStatsError(null);
+      setIsLoadingTodayStats(true);
+      setTodayStatsError(null);
+      setIsLoadingDispensaryPerformance(true);
+      setDispensaryPerformanceError(null);
+      setIsLoadingDispensaryPerformanceSummary(true);
+      setDispensaryPerformanceSummaryError(null);
 
       try {
         const fetchedCardStats = await fetchDashboardExpirationCardStats();
@@ -125,6 +186,49 @@ export default function DashboardPage() {
         setLiveStats({ expiredPatients: 0, expiringIn30Days: 0, expiringIn60Days: 0, expiringIn90Days: 0, renewalRatePercentage: 0 });
       } finally {
         setIsLoadingLiveStats(false);
+      }
+      
+      // NEW: Fetch critical expiration stats
+      try {
+        const fetchedCriticalStats = await fetchCriticalExpirationStats();
+        setCriticalStats(fetchedCriticalStats);
+        console.log("[Dashboard] Fetched critical stats:", fetchedCriticalStats);
+      } catch (e: any) {
+        setCriticalStatsError("Failed to load critical expiration statistics.");
+        console.error("[Dashboard] Error fetching critical stats:", e);
+      } finally {
+        setIsLoadingCriticalStats(false);
+      }
+      
+      // NEW: Fetch today's processing stats
+      try {
+        const fetchedTodayStats = await fetchTodayProcessingStats();
+        setTodayStats(fetchedTodayStats);
+        console.log("[Dashboard] Fetched today stats:", fetchedTodayStats);
+      } catch (e: any) {
+        setTodayStatsError("Failed to load today's processing statistics.");
+        console.error("[Dashboard] Error fetching today stats:", e);
+      } finally {
+        setIsLoadingTodayStats(false);
+      }
+      
+      // NEW: Fetch dispensary performance stats
+      try {
+        const [fetchedDispensaryPerformance, fetchedDispensaryPerformanceSummary] = await Promise.all([
+          fetchDispensaryPerformanceStats(),
+          fetchDispensaryPerformanceSummary()
+        ]);
+        setDispensaryPerformance(fetchedDispensaryPerformance);
+        setDispensaryPerformanceSummary(fetchedDispensaryPerformanceSummary);
+        console.log("[Dashboard] Fetched dispensary performance:", fetchedDispensaryPerformance);
+        console.log("[Dashboard] Fetched dispensary summary:", fetchedDispensaryPerformanceSummary);
+      } catch (e: any) {
+        setDispensaryPerformanceError("Failed to load dispensary performance statistics.");
+        setDispensaryPerformanceSummaryError("Failed to load dispensary performance summary.");
+        console.error("[Dashboard] Error fetching dispensary performance:", e);
+      } finally {
+        setIsLoadingDispensaryPerformance(false);
+        setIsLoadingDispensaryPerformanceSummary(false);
       }
 
       try {
@@ -330,7 +434,7 @@ export default function DashboardPage() {
       <div className="space-y-6">
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
 
-        {(liveStatsError || expirationChartError || submissionStatsError || chatMetricsError) && (
+        {(liveStatsError || expirationChartError || submissionStatsError || chatMetricsError || criticalStatsError || todayStatsError || dispensaryPerformanceError) && (
           <Card className="border-destructive/50">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-destructive">
@@ -342,10 +446,173 @@ export default function DashboardPage() {
               {expirationChartError && <p>Expiration Chart: {expirationChartError}</p>}
               {submissionStatsError && <p>License Submission Stats: {submissionStatsError}</p>}
               {chatMetricsError && <p>Chat Analytics: {chatMetricsError}</p>}
+              {criticalStatsError && <p>Critical Expiration Stats: {criticalStatsError}</p>}
+              {todayStatsError && <p>Today's Processing Stats: {todayStatsError}</p>}
+              {dispensaryPerformanceError && <p>Dispensary Performance: {dispensaryPerformanceError}</p>}
               <p className="mt-2 text-muted-foreground">Some dashboard statistics may be unavailable or inaccurate.</p>
             </CardContent>
           </Card>
         )}
+
+        {/* Urgencia Operacional Section - NUEVOS CARDS CRÍTICOS */}
+        <h2 className="text-2xl font-semibold tracking-tight pt-4">🚨 Urgencia Operacional</h2>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <Card className="border-red-500/70 bg-red-50/50 dark:bg-red-950/20">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Próximos 7 Días</CardTitle>
+              <CalendarClock className="h-4 w-4 text-red-600" />
+            </CardHeader>
+            <CardContent>
+              {renderStatCardContent(criticalStats.expiringNext7Days, "Requieren llamada URGENTE", isLoadingCriticalStats, criticalStatsError)}
+            </CardContent>
+            <CardFooter>
+              <Link href="/patients?exp=7days" className="w-full" passHref>
+                <Button variant="outline" size="sm" className="w-full text-red-600 border-red-500 hover:bg-red-500/10">Llamar Ahora</Button>
+              </Link>
+            </CardFooter>
+          </Card>
+          
+          <Card className="border-orange-500/70 bg-orange-50/50 dark:bg-orange-950/20">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Próximas 48 Horas</CardTitle>
+              <Clock className="h-4 w-4 text-orange-600" />
+            </CardHeader>
+            <CardContent>
+              {renderStatCardContent(criticalStats.expiringNext48Hours, "Crítico - Hoy/Mañana", isLoadingCriticalStats, criticalStatsError)}
+            </CardContent>
+            <CardFooter>
+              <Link href="/patients?exp=48hours" className="w-full" passHref>
+                <Button variant="outline" size="sm" className="w-full text-orange-600 border-orange-500 hover:bg-orange-500/10">Contactar HOY</Button>
+              </Link>
+            </CardFooter>
+          </Card>
+          
+          <Card className="border-green-500/70 bg-green-50/50 dark:bg-green-950/20">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Renovaciones Hoy</CardTitle>
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+            </CardHeader>
+            <CardContent>
+              {renderStatCardContent(todayStats.renewalsSubmittedToday, "Submissions recibidas hoy", isLoadingTodayStats, todayStatsError)}
+            </CardContent>
+            <CardFooter>
+              <Link href="/admin/submissions?filter=today&type=renewal" className="w-full" passHref>
+                <Button variant="outline" size="sm" className="w-full text-green-600 border-green-500 hover:bg-green-500/10">Ver Detalles</Button>
+              </Link>
+            </CardFooter>
+          </Card>
+          
+          <Card className="border-blue-500/70 bg-blue-50/50 dark:bg-blue-950/20">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Nuevas Licencias Hoy</CardTitle>
+              <Star className="h-4 w-4 text-blue-600" />
+            </CardHeader>
+            <CardContent>
+              {renderStatCardContent(todayStats.newLicensesSubmittedToday, "Submissions nuevas recibidas hoy", isLoadingTodayStats, todayStatsError)}
+            </CardContent>
+            <CardFooter>
+              <Link href="/admin/submissions?filter=today&type=new" className="w-full" passHref>
+                <Button variant="outline" size="sm" className="w-full text-blue-600 border-blue-500 hover:bg-blue-500/10">Ver Submissions</Button>
+              </Link>
+            </CardFooter>
+          </Card>
+        </div>
+
+        {/* Performance por Dispensario */}
+        <Card className="lg:col-span-full">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Award className="h-5 w-5 text-primary"/>Performance por Dispensario (Últimos 3 Meses)</CardTitle>
+            <CardDescription>Análisis de eficiencia operacional por ubicación - Datos optimizados y simplificados.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoadingDispensaryPerformance || isLoadingDispensaryPerformanceSummary ? (
+              <div className="flex items-center justify-center h-[350px]">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <span className="ml-2">Cargando performance optimizada...</span>
+              </div>
+            ) : (dispensaryPerformanceError || dispensaryPerformanceSummaryError) ? (
+              <div className="p-4 border rounded-lg bg-destructive/10 text-destructive flex items-center gap-2 h-[350px]">
+                <AlertTriangle className="h-5 w-5" /> 
+                <div>
+                  <p>{dispensaryPerformanceError}</p>
+                  {dispensaryPerformanceSummaryError && <p>{dispensaryPerformanceSummaryError}</p>}
+                </div>
+              </div>
+            ) : dispensaryPerformance.length > 0 ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <Card>
+                    <CardHeader className="pb-2"><CardTitle className="text-base">Total Dispensarios</CardTitle></CardHeader>
+                    <CardContent><p className="text-3xl font-bold">{dispensaryPerformanceSummary.totalDispensaries}</p></CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2"><CardTitle className="text-base">Mejor Tasa Renovación</CardTitle></CardHeader>
+                    <CardContent>
+                      <p className="text-3xl font-bold">{dispensaryPerformanceSummary.bestRenewalRate}%</p>
+                      <p className="text-sm text-muted-foreground">{dispensaryPerformanceSummary.bestRenewalDispensary}</p>
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2"><CardTitle className="text-base">Más Activo</CardTitle></CardHeader>
+                    <CardContent>
+                      <p className="text-3xl font-bold">{dispensaryPerformanceSummary.mostActiveCount}</p>
+                      <p className="text-sm text-muted-foreground">{dispensaryPerformanceSummary.mostActiveDispensary}</p>
+                    </CardContent>
+                  </Card>
+                </div>
+                
+                {/* Información del período */}
+                {dispensaryPerformanceSummary.periodStart && dispensaryPerformanceSummary.periodEnd && (
+                  <div className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
+                    📊 Análisis del período: {format(parseISO(dispensaryPerformanceSummary.periodStart), 'dd MMM yyyy')} - {format(parseISO(dispensaryPerformanceSummary.periodEnd), 'dd MMM yyyy')} 
+                    | Total submissions analizadas: {dispensaryPerformanceSummary.totalSubmissionsPeriod.toLocaleString()}
+                  </div>
+                )}
+                
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Dispensario</TableHead>
+                      <TableHead>Tasa Renovación</TableHead>
+                      <TableHead>Total Renovaciones</TableHead>
+                      <TableHead>Licencias Nuevas</TableHead>
+                      <TableHead>Total Submissions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dispensaryPerformance.map((dispensary, index) => (
+                      <TableRow key={index}>
+                        <TableCell className="font-medium">{dispensary.dispensaryName}</TableCell>
+                        <TableCell>
+                          <span className={`px-2 py-1 text-xs rounded-full ${
+                            dispensary.renewalRate >= 70 ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' :
+                            dispensary.renewalRate >= 50 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300' :
+                            'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                          }`}>
+                            {dispensary.renewalRate}%
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium text-green-600">{dispensary.totalRenewals}</span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium text-blue-600">{dispensary.totalNewLicenses}</span>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-semibold">{dispensary.totalSubmissions}</span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground h-[350px] flex items-center justify-center">
+                No hay datos de performance disponibles para los últimos 3 meses.
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Patient & License Analytics Section */}
         <h2 className="text-2xl font-semibold tracking-tight pt-4">Patient & License Analytics</h2>

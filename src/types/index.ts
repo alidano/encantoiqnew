@@ -226,6 +226,39 @@ export interface SubmissionStats {
   allLocationsMonthlyBreakdown: MonthlyLocationBreakdown[];
 }
 
+export interface DispensaryPerformanceStats {
+  totalSubmissions: number;
+  topLocation: { name: string; count: number } | null;
+  monthlyAverage: number;
+}
+
+// Types for Critical Expiration Management
+export interface CriticalExpirationStats {
+  expiringNext7Days: number;
+  expiringNext48Hours: number;
+  expiringToday: number;
+  expiredYesterday: number;
+}
+
+// Types for Today's Processing Metrics
+export interface TodayProcessingStats {
+  renewalsCompletedToday: number;
+  newLicensesProcessedToday: number;
+  totalProcessedToday: number;
+  pendingToday: number;
+}
+
+// Types for Dispensary Performance Analysis
+export interface DispensaryPerformance {
+  dispensaryName: string;
+  renewalRate: number; // Percentage
+  totalRenewals: number;
+  totalNewLicenses: number;
+  totalSubmissions: number;
+  avgProcessingDays: number;
+  pendingCount: number;
+}
+
 // Types for Demo Patient Page
 export interface Product {
   id: string;
@@ -320,4 +353,39 @@ export interface ChatDashboardTodayMetrics {
   sentMessagesToday: number;
   receivedMessagesToday: number;
   busiestHourToday: string; // String like "14:00" or "No data", as per new SQL
+}
+
+// Dashboard Critical Expiration Statistics
+export interface CriticalExpirationStats {
+  expiringNext7Days: number;
+  expiringNext48Hours: number;
+  expiringToday: number;
+  expiredYesterday: number;
+}
+
+// Dashboard Today's Processing Statistics
+export interface TodayProcessingStats {
+  renewalsCompletedToday: number;
+  newLicensesProcessedToday: number;
+  totalProcessedToday: number;
+  pendingToday: number;
+  // Agregamos las propiedades para submissions recibidas
+  renewalsSubmittedToday: number;
+  newLicensesSubmittedToday: number;
+  totalSubmittedToday: number;
+  processingRatePercentage: number;
+  inProgressSubmissionsToday: number;
+  reviewSubmissionsToday: number;
+  failedSubmissionsToday: number;
+}
+
+// Dashboard Dispensary Performance Analytics
+export interface DispensaryPerformance {
+  dispensaryName: string;
+  renewalRate: number; // Percentage
+  totalRenewals: number;
+  totalNewLicenses: number;
+  totalSubmissions: number;
+  avgProcessingDays: number;
+  pendingCount: number;
 }

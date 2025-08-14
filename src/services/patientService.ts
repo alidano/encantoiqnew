@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase/client';
-import type { Patient, Note, LicenseSubmission, EnhancedLicenseSubmission, SubmissionStats, MonthlyTrendItem, TypedSubmissionStats, MarketingSendLog, MonthlyLocationBreakdown, DashboardExpirationCardStats, ExpirationDataPoint } from '@/types';
+import type { Patient, Note, LicenseSubmission, EnhancedLicenseSubmission, SubmissionStats, MonthlyTrendItem, TypedSubmissionStats, MarketingSendLog, MonthlyLocationBreakdown, DashboardExpirationCardStats, ExpirationDataPoint, CriticalExpirationStats, TodayProcessingStats, DispensaryPerformance } from '@/types';
 import { differenceInDays, parseISO, isValid, format, startOfMonth, endOfMonth, subMonths, getMonth, getYear, isWithinInterval, startOfToday, addMonths, addDays, subYears } from 'date-fns';
 
 // MIGRATED: Helper function to transform a customer row to Patient type
@@ -1169,198 +1169,46 @@ export async function fetchPatientMarketingHistory(patientEmail: string): Promis
   })) as MarketingSendLog[];
 }
 
-// UPDATED: Fixed renewal rate calculation using correct Supabase count queries
+// UPDATED: Use pre-calculated stats from database for optimal performance
 export async function fetchDashboardExpirationCardStats(): Promise<DashboardExpirationCardStats> {
   try {
-    // Get current date for calculations
-    const now = new Date();
-    const currentDate = format(now, 'yyyy-MM-dd');
+    console.log('[fetchDashboardExpirationCardStats] Using pre-calculated stats from database...');
     
-    // Calculate date ranges for 30, 60, 90 days
-    const in30Days = format(addDays(now, 30), 'yyyy-MM-dd');
-    const in60Days = format(addDays(now, 60), 'yyyy-MM-dd');
-    const in90Days = format(addDays(now, 90), 'yyyy-MM-dd');
+    // Use RPC function to get pre-calculated stats
+    const { data, error } = await supabase.rpc('get_dashboard_expiration_stats');
     
-    // Current month for renewal rate calculation
-    const currentMonthStart = format(startOfMonth(now), 'yyyy-MM-dd');
-    const currentMonthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
-
-    console.log('[fetchDashboardExpirationCardStats] Date ranges:', {
-      currentDate,
-      currentMonthStart,
-      currentMonthEnd,
-      in30Days,
-      in60Days,
-      in90Days
-    });
-
-    // 1. Get expired customers (licenses already expired) - UPDATED TO USE CUSTOMERS
-    const { data: expiredData, error: expiredError } = await supabase
-      .from('customers')
-      .select('customerid, licenseexpyear, licenseexpmonth')
-      .eq('deleted', 0)
-      .not('licenseexpyear', 'is', null)
-      .not('licenseexpmonth', 'is', null);
-
-    if (expiredError) throw expiredError;
-    
-    const expiredCount = expiredData?.filter(customer => {
-      const year = parseInt(customer.licenseexpyear);
-      const month = parseInt(customer.licenseexpmonth);
-      if (year > 1900 && month >= 1 && month <= 12) {
-        const expDate = new Date(year, month - 1, 1);
-        expDate.setMonth(expDate.getMonth() + 1);
-        expDate.setDate(expDate.getDate() - 1);
-        return expDate < now;
-      }
-      return false;
-    }).length || 0;
-
-    if (expiredError) throw expiredError;
-
-    // 2. Get customers expiring in next 30 days - UPDATED TO USE CUSTOMERS
-    const { data: expiring30Data, error: expiring30Error } = await supabase
-      .from('customers')
-      .select('customerid, licenseexpyear, licenseexpmonth')
-      .eq('deleted', 0)
-      .not('licenseexpyear', 'is', null)
-      .not('licenseexpmonth', 'is', null);
-
-    if (expiring30Error) throw expiring30Error;
-    
-    const expiring30Count = expiring30Data?.filter(customer => {
-      const year = parseInt(customer.licenseexpyear);
-      const month = parseInt(customer.licenseexpmonth);
-      if (year > 1900 && month >= 1 && month <= 12) {
-        const expDate = new Date(year, month - 1, 1);
-        expDate.setMonth(expDate.getMonth() + 1);
-        expDate.setDate(expDate.getDate() - 1);
-        const in30DaysDate = addDays(now, 30);
-        return expDate >= now && expDate <= in30DaysDate;
-      }
-      return false;
-    }).length || 0;
-
-    if (expiring30Error) throw expiring30Error;
-
-    // 3. Get customers expiring in next 60 days (31-60 days from now) - UPDATED TO USE CUSTOMERS
-    const { data: expiring60Data, error: expiring60Error } = await supabase
-      .from('customers')
-      .select('customerid, licenseexpyear, licenseexpmonth')
-      .eq('deleted', 0)
-      .not('licenseexpyear', 'is', null)
-      .not('licenseexpmonth', 'is', null);
-
-    if (expiring60Error) throw expiring60Error;
-    
-    const expiring60Count = expiring60Data?.filter(customer => {
-      const year = parseInt(customer.licenseexpyear);
-      const month = parseInt(customer.licenseexpmonth);
-      if (year > 1900 && month >= 1 && month <= 12) {
-        const expDate = new Date(year, month - 1, 1);
-        expDate.setMonth(expDate.getMonth() + 1);
-        expDate.setDate(expDate.getDate() - 1);
-        const in31DaysDate = addDays(now, 31);
-        const in60DaysDate = addDays(now, 60);
-        return expDate >= in31DaysDate && expDate <= in60DaysDate;
-      }
-      return false;
-    }).length || 0;
-
-    if (expiring60Error) throw expiring60Error;
-
-    // 4. Get customers expiring in next 90 days (61-90 days from now) - UPDATED TO USE CUSTOMERS
-    const { data: expiring90Data, error: expiring90Error } = await supabase
-      .from('customers')
-      .select('customerid, licenseexpyear, licenseexpmonth')
-      .eq('deleted', 0)
-      .not('licenseexpyear', 'is', null)
-      .not('licenseexpmonth', 'is', null);
-
-    if (expiring90Error) throw expiring90Error;
-    
-    const expiring90Count = expiring90Data?.filter(customer => {
-      const year = parseInt(customer.licenseexpyear);
-      const month = parseInt(customer.licenseexpmonth);
-      if (year > 1900 && month >= 1 && month <= 12) {
-        const expDate = new Date(year, month - 1, 1);
-        expDate.setMonth(expDate.getMonth() + 1);
-        expDate.setDate(expDate.getDate() - 1);
-        const in61DaysDate = addDays(now, 61);
-        const in90DaysDate = addDays(now, 90);
-        return expDate >= in61DaysDate && expDate <= in90DaysDate;
-      }
-      return false;
-    }).length || 0;
-
-    if (expiring90Error) throw expiring90Error;
-
-    // 5. Get customers expiring in current month - UPDATED TO USE CUSTOMERS
-    const { data: patientsExpiringData, error: patientsExpiringError } = await supabase
-      .from('customers')
-      .select('customerid, licenseexpyear, licenseexpmonth')
-      .eq('deleted', 0)
-      .not('licenseexpyear', 'is', null)
-      .not('licenseexpmonth', 'is', null);
-
-    if (patientsExpiringError) throw patientsExpiringError;
-    
-    const patientsExpiringThisMonth = patientsExpiringData?.filter(customer => {
-      const year = parseInt(customer.licenseexpyear);
-      const month = parseInt(customer.licenseexpmonth);
-      if (year > 1900 && month >= 1 && month <= 12) {
-        const expDate = new Date(year, month - 1, 1);
-        expDate.setMonth(expDate.getMonth() + 1);
-        expDate.setDate(expDate.getDate() - 1);
-        const monthStart = startOfMonth(now);
-        const monthEnd = endOfMonth(now);
-        return expDate >= monthStart && expDate <= monthEnd;
-      }
-      return false;
-    }).length || 0;
-
-    if (patientsExpiringError) throw patientsExpiringError;
-
-    // 6. Get renewals submitted in current month - FIXED COUNT QUERY
-    const { count: renewalsSubmittedThisMonth, error: renewalsError } = await supabase
-      .from('license_submissions')
-      .select('*', { count: 'exact', head: true })
-      .gte('submitted_at', currentMonthStart)
-      .lte('submitted_at', currentMonthEnd)
-      .ilike('submission_type', '%renewal%');
-
-    if (renewalsError) throw renewalsError;
-
-    // Calculate renewal rate: min(renewals ÷ expiring × 100, 100)
-    let renewalRatePercentage = 0;
-    if (patientsExpiringThisMonth && patientsExpiringThisMonth > 0) {
-      renewalRatePercentage = Math.min(
-        Math.round(((renewalsSubmittedThisMonth || 0) / patientsExpiringThisMonth) * 100 * 10) / 10, // Round to 1 decimal
-        100
-      );
+    if (error) {
+      console.error('[fetchDashboardExpirationCardStats] RPC Error:', error);
+      throw error;
     }
-
-    console.log('[fetchDashboardExpirationCardStats] Renewal rate calculation:', {
-      patientsExpiringThisMonth: patientsExpiringThisMonth || 0,
-      renewalsSubmittedThisMonth: renewalsSubmittedThisMonth || 0,
-      calculatedPercentage: renewalRatePercentage
-    });
-
-    const stats: DashboardExpirationCardStats = {
-      expiredPatients: expiredCount || 0,
-      expiringIn30Days: expiring30Count || 0,
-      expiringIn60Days: expiring60Count || 0,
-      expiringIn90Days: expiring90Count || 0,
-      renewalRatePercentage: renewalRatePercentage
+    
+    if (!data) {
+      console.warn('[fetchDashboardExpirationCardStats] No data returned from RPC');
+      return {
+        expiredPatients: 0,
+        expiringIn30Days: 0,
+        expiringIn60Days: 0,
+        expiringIn90Days: 0,
+        renewalRatePercentage: 0
+      };
+    }
+    
+    console.log('[fetchDashboardExpirationCardStats] Pre-calculated stats retrieved:', data);
+    
+    return {
+      expiredPatients: data.expiredPatients || 0,
+      expiringIn30Days: data.expiringIn30Days || 0,
+      expiringIn60Days: data.expiringIn60Days || 0,
+      expiringIn90Days: data.expiringIn90Days || 0,
+      renewalRatePercentage: data.renewalRatePercentage || 0
     };
-
-    console.log('[fetchDashboardExpirationCardStats] Final stats:', stats);
-
-    return stats;
-
+    
   } catch (error) {
-    console.error('[fetchDashboardExpirationCardStats] Error:', error);
-    return { 
+    console.error('[fetchDashboardExpirationCardStats] Error fetching pre-calculated stats:', error);
+    
+    // Fallback: Return default values if pre-calculated stats fail
+    console.log('[fetchDashboardExpirationCardStats] Using fallback default values...');
+    return {
       expiredPatients: 0,
       expiringIn30Days: 0,
       expiringIn60Days: 0,
@@ -1710,4 +1558,488 @@ export async function fetchSubmissionAnalytics(startDate?: Date, endDate?: Date)
     statusBreakdown,
     paymentStatusBreakdown
   };
+}
+
+// NEW FUNCTIONS FOR ENHANCED DASHBOARD OPERATIONS
+
+// UPDATED: Fetch critical expiration stats using pre-calculated data
+export async function fetchCriticalExpirationStats(): Promise<CriticalExpirationStats> {
+  try {
+    console.log('[fetchCriticalExpirationStats] Using pre-calculated stats...');
+    
+    // Use RPC function to get pre-calculated stats
+    const { data, error } = await supabase.rpc('get_dashboard_expiration_stats');
+    
+    if (error) {
+      console.error('[fetchCriticalExpirationStats] RPC Error:', error);
+      throw error;
+    }
+    
+    if (!data) {
+      console.warn('[fetchCriticalExpirationStats] No data returned from RPC');
+      return {
+        expiringNext7Days: 0,
+        expiringNext48Hours: 0,
+        expiringToday: 0,
+        expiredYesterday: 0
+      };
+    }
+    
+    console.log('[fetchCriticalExpirationStats] Pre-calculated stats retrieved:', data);
+    
+    return {
+      expiringNext7Days: data.expiringNext7Days || 0,
+      expiringNext48Hours: data.expiringNext48Hours || 0,
+      expiringToday: data.expiringToday || 0,
+      expiredYesterday: 0 // Not included in current pre-calculated stats
+    };
+    
+  } catch (error) {
+    console.error('[fetchCriticalExpirationStats] Error:', error);
+    return {
+      expiringNext7Days: 0,
+      expiringNext48Hours: 0,
+      expiringToday: 0,
+      expiredYesterday: 0
+    };
+  }
+}
+
+// UPDATED: Fetch today's processing stats using separate processing table
+export async function fetchTodayProcessingStats(): Promise<TodayProcessingStats> {
+  try {
+    console.log('[fetchTodayProcessingStats] Using pre-calculated processing stats...');
+    
+    const { data, error } = await supabase.rpc('get_dashboard_processing_stats');
+    
+    if (error) {
+      console.error('[fetchTodayProcessingStats] RPC Error:', error);
+      throw error;
+    }
+    
+    if (!data) {
+      console.warn('[fetchTodayProcessingStats] No data returned from RPC');
+      return {
+        renewalsCompletedToday: 0,
+        newLicensesProcessedToday: 0,
+        totalProcessedToday: 0,
+        pendingToday: 0,
+        renewalsSubmittedToday: 0,
+        newLicensesSubmittedToday: 0,
+        totalSubmittedToday: 0,
+        processingRatePercentage: 0,
+        inProgressSubmissionsToday: 0,
+        reviewSubmissionsToday: 0,
+        failedSubmissionsToday: 0
+      };
+    }
+    
+    console.log('[fetchTodayProcessingStats] Pre-calculated processing stats:', data);
+    
+    return {
+      renewalsCompletedToday: data.renewalsProcessedToday || 0,
+      newLicensesProcessedToday: data.newLicensesProcessedToday || 0,
+      totalProcessedToday: data.totalProcessedToday || 0,
+      pendingToday: data.pendingSubmissionsToday || 0,
+      // Ahora incluimos las propiedades de submissions recibidas
+      renewalsSubmittedToday: data.renewalsSubmittedToday || 0,
+      newLicensesSubmittedToday: data.newLicensesSubmittedToday || 0,
+      totalSubmittedToday: data.totalSubmittedToday || 0,
+      processingRatePercentage: data.processingRatePercentage || 0,
+      inProgressSubmissionsToday: data.inProgressSubmissionsToday || 0,
+      reviewSubmissionsToday: data.reviewSubmissionsToday || 0,
+      failedSubmissionsToday: data.failedSubmissionsToday || 0
+    };
+    
+  } catch (error) {
+    console.error('[fetchTodayProcessingStats] Error:', error);
+    return {
+      renewalsCompletedToday: 0,
+      newLicensesProcessedToday: 0,
+      totalProcessedToday: 0,
+      pendingToday: 0,
+      renewalsSubmittedToday: 0,
+      newLicensesSubmittedToday: 0,
+      totalSubmittedToday: 0,
+      processingRatePercentage: 0,
+      inProgressSubmissionsToday: 0,
+      reviewSubmissionsToday: 0,
+      failedSubmissionsToday: 0
+    };
+  }
+}
+
+// NEW: Combined dashboard stats interface
+export interface CombinedDashboardStats {
+  expiration: DashboardExpirationCardStats & CriticalExpirationStats;
+  processing: TodayProcessingStats & {
+    renewalsSubmittedToday: number;
+    newLicensesSubmittedToday: number;
+    totalSubmittedToday: number;
+    processingRatePercentage: number;
+    inProgressSubmissionsToday: number;
+    reviewSubmissionsToday: number;
+    failedSubmissionsToday: number;
+  };
+}
+
+// OPTIMAL: Single function to get all dashboard stats
+export async function fetchAllDashboardStats(): Promise<CombinedDashboardStats> {
+  try {
+    console.log('[fetchAllDashboardStats] Using combined pre-calculated stats...');
+    
+    const { data, error } = await supabase.rpc('get_dashboard_all_stats');
+    
+    if (error) {
+      console.error('[fetchAllDashboardStats] RPC Error:', error);
+      throw error;
+    }
+    
+    if (!data?.expirationStats || !data?.processingStats) {
+      console.warn('[fetchAllDashboardStats] Incomplete data returned from RPC');
+      throw new Error('Incomplete dashboard data');
+    }
+    
+    const expStats = data.expirationStats;
+    const procStats = data.processingStats;
+    
+    console.log('[fetchAllDashboardStats] Combined stats retrieved successfully');
+    
+    return {
+      expiration: {
+        // Expiration card stats
+        expiredPatients: expStats.expiredPatients || 0,
+        expiringIn30Days: expStats.expiringIn30Days || 0,
+        expiringIn60Days: expStats.expiringIn60Days || 0,
+        expiringIn90Days: expStats.expiringIn90Days || 0,
+        renewalRatePercentage: expStats.renewalRatePercentage || 0,
+        // Critical stats
+        expiringNext7Days: expStats.expiringNext7Days || 0,
+        expiringNext48Hours: expStats.expiringNext48Hours || 0,
+        expiringToday: expStats.expiringToday || 0,
+        expiredYesterday: 0
+      },
+      processing: {
+        // Today processing stats
+        renewalsCompletedToday: procStats.renewalsProcessedToday || 0,
+        newLicensesProcessedToday: procStats.newLicensesProcessedToday || 0,
+        totalProcessedToday: procStats.totalProcessedToday || 0,
+        pendingToday: procStats.pendingSubmissionsToday || 0,
+        // Additional processing stats
+        renewalsSubmittedToday: procStats.renewalsSubmittedToday || 0,
+        newLicensesSubmittedToday: procStats.newLicensesSubmittedToday || 0,
+        totalSubmittedToday: procStats.totalSubmittedToday || 0,
+        processingRatePercentage: procStats.processingRatePercentage || 0,
+        inProgressSubmissionsToday: procStats.inProgressSubmissionsToday || 0,
+        reviewSubmissionsToday: procStats.reviewSubmissionsToday || 0,
+        failedSubmissionsToday: procStats.failedSubmissionsToday || 0
+      }
+    };
+    
+  } catch (error) {
+    console.error('[fetchAllDashboardStats] Error, falling back to individual calls:', error);
+    
+    // Fallback: llamar funciones individuales
+    const [expirationStats, criticalStats, processingStats] = await Promise.allSettled([
+      fetchDashboardExpirationCardStats(),
+      fetchCriticalExpirationStats(), 
+      fetchTodayProcessingStats()
+    ]);
+    
+    return {
+      expiration: {
+        ...(expirationStats.status === 'fulfilled' ? expirationStats.value : {
+          expiredPatients: 0, expiringIn30Days: 0, expiringIn60Days: 0, 
+          expiringIn90Days: 0, renewalRatePercentage: 0
+        }),
+        ...(criticalStats.status === 'fulfilled' ? criticalStats.value : {
+          expiringNext7Days: 0, expiringNext48Hours: 0, expiringToday: 0, expiredYesterday: 0
+        })
+      },
+      processing: {
+        ...(processingStats.status === 'fulfilled' ? processingStats.value : {
+          renewalsCompletedToday: 0, newLicensesProcessedToday: 0, 
+          totalProcessedToday: 0, pendingToday: 0
+        }),
+        renewalsSubmittedToday: 0,
+        newLicensesSubmittedToday: 0,
+        totalSubmittedToday: 0,
+        processingRatePercentage: 0,
+        inProgressSubmissionsToday: 0,
+        reviewSubmissionsToday: 0,
+        failedSubmissionsToday: 0
+      }
+    };
+  }
+}
+
+// Functions to manually refresh stats
+export async function refreshExpirationStats(): Promise<void> {
+  try {
+    console.log('[refreshExpirationStats] Forcing expiration stats recalculation...');
+    const { error } = await supabase.rpc('refresh_dashboard_expiration_stats');
+    if (error) throw error;
+    console.log('[refreshExpirationStats] Expiration stats refreshed successfully');
+  } catch (error) {
+    console.error('[refreshExpirationStats] Error:', error);
+    throw new Error('Failed to refresh expiration statistics');
+  }
+}
+
+export async function refreshProcessingStats(): Promise<void> {
+  try {
+    console.log('[refreshProcessingStats] Forcing processing stats recalculation...');
+    const { error } = await supabase.rpc('refresh_dashboard_processing_stats');
+    if (error) throw error;
+    console.log('[refreshProcessingStats] Processing stats refreshed successfully');
+  } catch (error) {
+    console.error('[refreshProcessingStats] Error:', error);
+    throw new Error('Failed to refresh processing statistics');
+  }
+}
+
+export async function refreshAllDashboardStats(): Promise<void> {
+  try {
+    console.log('[refreshAllDashboardStats] Refreshing all dashboard stats...');
+    await Promise.all([
+      refreshExpirationStats(),
+      refreshProcessingStats()
+    ]);
+    console.log('[refreshAllDashboardStats] All stats refreshed successfully');
+  } catch (error) {
+    console.error('[refreshAllDashboardStats] Error:', error);
+    throw new Error('Failed to refresh dashboard statistics');
+  }
+}
+
+// Fetch dispensary performance analytics
+
+// OPTIMIZED: Fetch dispensary performance analytics using pre-calculated stats
+export async function fetchDispensaryPerformanceStats(): Promise<DispensaryPerformance[]> {
+  try {
+    console.log('[fetchDispensaryPerformanceStats] Using pre-calculated dispensary performance stats...');
+    
+    // Use RPC function to get pre-calculated stats (3-month period)
+    const { data, error } = await supabase.rpc('get_dispensary_performance_stats');
+    
+    if (error) {
+      console.error('[fetchDispensaryPerformanceStats] RPC Error:', error);
+      throw error;
+    }
+    
+    if (!data || data.length === 0) {
+      console.warn('[fetchDispensaryPerformanceStats] No performance data returned');
+      return [];
+    }
+    
+    console.log(`[fetchDispensaryPerformanceStats] Retrieved ${data.length} dispensary performance records`);
+    
+    // Transform data to match interface
+    const performanceStats: DispensaryPerformance[] = data.map(stat => ({
+      dispensaryName: stat.dispensary_name,
+      renewalRate: Number(stat.renewal_rate) || 0,
+      totalRenewals: stat.total_renewals || 0,
+      totalNewLicenses: stat.total_new_licenses || 0,
+      totalSubmissions: stat.total_submissions || 0,
+      avgProcessingDays: Number(stat.avg_processing_days) || 0,
+      pendingCount: stat.pending_count || 0
+    }));
+    
+    console.log('[fetchDispensaryPerformanceStats] Optimized performance stats:', performanceStats.slice(0, 3));
+    return performanceStats;
+    
+  } catch (error) {
+    console.error('[fetchDispensaryPerformanceStats] Error with pre-calculated stats, falling back to live calculation:', error);
+    
+    // Fallback: Use improved live calculation with 3-month period
+    return await fetchDispensaryPerformanceStatsLive();
+  }
+}
+
+// ENHANCED: Fallback function with improved live calculation
+async function fetchDispensaryPerformanceStatsLive(): Promise<DispensaryPerformance[]> {
+  try {
+    const currentDate = new Date();
+    const threeMonthsAgo = subMonths(currentDate, 3); // IMPROVED: 3 months instead of 1
+    
+    console.log('[fetchDispensaryPerformanceStatsLive] Analyzing performance from:', format(threeMonthsAgo, 'yyyy-MM-dd'), 'to', format(currentDate, 'yyyy-MM-dd'));
+
+    // Get all submissions for performance analysis with improved query
+    const { data: submissions, error: submissionsError } = await supabase
+      .from('license_submissions')
+      .select('dispensary_location, submission_type, submitted_at, processed_at, status')
+      .gte('submitted_at', threeMonthsAgo.toISOString())
+      .lte('submitted_at', currentDate.toISOString());
+
+    if (submissionsError) throw submissionsError;
+
+    if (!submissions || submissions.length === 0) {
+      console.warn('[fetchDispensaryPerformanceStatsLive] No submissions found for 3-month period');
+      return [];
+    }
+
+    console.log(`[fetchDispensaryPerformanceStatsLive] Found ${submissions.length} submissions for analysis`);
+
+    const performanceMap = new Map<string, {
+      renewals: number;
+      newLicenses: number;
+      totalSubmissions: number;
+      totalProcessingDays: number;
+      processedCount: number;
+      pending: number;
+    }>();
+
+    // Process submissions by location with improved logic
+    submissions.forEach(sub => {
+      const location = sub.dispensary_location || 'Unknown Location';
+      const existing = performanceMap.get(location) || {
+        renewals: 0,
+        newLicenses: 0,
+        totalSubmissions: 0,
+        totalProcessingDays: 0,
+        processedCount: 0,
+        pending: 0
+      };
+
+      existing.totalSubmissions++;
+      
+      // IMPROVED: Better type detection
+      const submissionType = sub.submission_type?.toLowerCase() || '';
+      if (submissionType.includes('renewal')) {
+        existing.renewals++;
+      } else if (submissionType.includes('new')) {
+        existing.newLicenses++;
+      }
+
+      // IMPROVED: More flexible processing time calculation
+      const validProcessedStatuses = ['PROCESSED', 'COMPLETED', 'APPROVED', 'FINISHED', 'SUCCESS'];
+      if (validProcessedStatuses.includes(sub.status) && sub.submitted_at && sub.processed_at) {
+        const submitted = parseISO(sub.submitted_at);
+        const processed = parseISO(sub.processed_at);
+        if (isValid(submitted) && isValid(processed)) {
+          const processingDays = differenceInDays(processed, submitted);
+          if (processingDays >= 0) { // Only count positive processing times
+            existing.totalProcessingDays += processingDays;
+            existing.processedCount++;
+          }
+        }
+      }
+      
+      // IMPROVED: Better pending status detection
+      const pendingStatuses = ['PENDING', 'IN_PROGRESS', 'REVIEW', 'SUBMITTED', 'AWAITING_REVIEW'];
+      if (pendingStatuses.includes(sub.status)) {
+        existing.pending++;
+      }
+
+      performanceMap.set(location, existing);
+    });
+
+    // Convert to array with calculated metrics
+    const performanceStats: DispensaryPerformance[] = Array.from(performanceMap.entries())
+      .map(([location, data]) => {
+        const renewalRate = data.totalSubmissions > 0 
+          ? (data.renewals / data.totalSubmissions) * 100 
+          : 0;
+        const avgProcessingDays = data.processedCount > 0 
+          ? data.totalProcessingDays / data.processedCount 
+          : 0;
+
+        return {
+          dispensaryName: location,
+          renewalRate: Math.round(renewalRate * 10) / 10, // Round to 1 decimal
+          totalRenewals: data.renewals,
+          totalNewLicenses: data.newLicenses,
+          totalSubmissions: data.totalSubmissions,
+          avgProcessingDays: Math.round(avgProcessingDays * 10) / 10,
+          pendingCount: data.pending
+        };
+      })
+      .sort((a, b) => b.totalSubmissions - a.totalSubmissions); // Sort by volume
+
+    console.log('[fetchDispensaryPerformanceStatsLive] Live calculation completed:', performanceStats.length, 'dispensaries');
+    return performanceStats;
+
+  } catch (error) {
+    console.error('[fetchDispensaryPerformanceStatsLive] Error:', error);
+    return [];
+  }
+}
+
+// NEW: Function to refresh dispensary performance stats manually
+export async function refreshDispensaryPerformanceStats(): Promise<void> {
+  try {
+    console.log('[refreshDispensaryPerformanceStats] Forcing dispensary performance recalculation...');
+    const { data, error } = await supabase.rpc('refresh_dispensary_performance_stats');
+    if (error) throw error;
+    console.log('[refreshDispensaryPerformanceStats] Stats refreshed:', data);
+  } catch (error) {
+    console.error('[refreshDispensaryPerformanceStats] Error:', error);
+    throw new Error('Failed to refresh dispensary performance statistics');
+  }
+}
+
+// NEW: Function to get dispensary performance summary
+export async function fetchDispensaryPerformanceSummary(): Promise<{
+  totalDispensaries: number;
+  bestRenewalRate: number;
+  bestRenewalDispensary: string;
+  mostActiveCount: number;
+  mostActiveDispensary: string;
+  avgProcessingDaysOverall: number;
+  totalSubmissionsPeriod: number;
+  periodStart: string;
+  periodEnd: string;
+}> {
+  try {
+    console.log('[fetchDispensaryPerformanceSummary] Getting performance summary...');
+    
+    const { data, error } = await supabase.rpc('get_dispensary_performance_summary');
+    
+    if (error) {
+      console.error('[fetchDispensaryPerformanceSummary] RPC Error:', error);
+      throw error;
+    }
+    
+    if (!data || data.length === 0) {
+      return {
+        totalDispensaries: 0,
+        bestRenewalRate: 0,
+        bestRenewalDispensary: 'N/A',
+        mostActiveCount: 0,
+        mostActiveDispensary: 'N/A',
+        avgProcessingDaysOverall: 0,
+        totalSubmissionsPeriod: 0,
+        periodStart: '',
+        periodEnd: ''
+      };
+    }
+    
+    const summary = data[0];
+    
+    return {
+      totalDispensaries: summary.total_dispensaries || 0,
+      bestRenewalRate: Number(summary.best_renewal_rate) || 0,
+      bestRenewalDispensary: summary.best_renewal_dispensary || 'N/A',
+      mostActiveCount: summary.most_active_count || 0,
+      mostActiveDispensary: summary.most_active_dispensary || 'N/A',
+      avgProcessingDaysOverall: Number(summary.avg_processing_days_overall) || 0,
+      totalSubmissionsPeriod: summary.total_submissions_period || 0,
+      periodStart: summary.period_start || '',
+      periodEnd: summary.period_end || ''
+    };
+    
+  } catch (error) {
+    console.error('[fetchDispensaryPerformanceSummary] Error:', error);
+    return {
+      totalDispensaries: 0,
+      bestRenewalRate: 0,
+      bestRenewalDispensary: 'N/A',
+      mostActiveCount: 0,
+      mostActiveDispensary: 'N/A',
+      avgProcessingDaysOverall: 0,
+      totalSubmissionsPeriod: 0,
+      periodStart: '',
+      periodEnd: ''
+    };
+  }
 }
