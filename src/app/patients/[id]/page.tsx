@@ -9,7 +9,7 @@ import { ArrowLeft, Loader2, AlertTriangle, UserCircle, Mail, Phone, CalendarDay
 import Link from "next/link";
 import Image from "next/image";
 import { useParams } from 'next/navigation';
-import { fetchPatientById, fetchSubmissionsForPatient, fetchCallLogsByPatientId, addCallLog, fetchCallOutcomeTypes, type CallLog, type CallOutcomeType } from '@/services/patientService';
+import { fetchPatientById, fetchSubmissionsForPatient, fetchCallLogsByCustomerId, addCallLogByCustomerId, fetchCallOutcomeTypes, type CallLog, type CallOutcomeType } from '@/services/patientService';
 import type { Patient, LicenseSubmission } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { format, parseISO, isValid } from 'date-fns';
@@ -189,16 +189,11 @@ export default function PatientDetailPage() {
   const loadCallLogs = React.useCallback(async () => {
     if (!patientId) return;
     
-    // Convert string patientId to number for legacy tables
-    const numericPatientId = parseInt(patientId, 10);
-    if (isNaN(numericPatientId)) {
-      console.warn('[PatientDetailPage] Cannot convert patientId to number for call logs:', patientId);
-      return;
-    }
+    // Use the UUID directly for the new customer_id-based system
     setIsLoadingCallLogs(true);
     setCallLogsError(null);
     try {
-      const logs = await fetchCallLogsByPatientId(numericPatientId);
+      const logs = await fetchCallLogsByCustomerId(patientId);
       setCallLogs(logs);
     } catch (e) {
       setCallLogsError("Failed to load call logs.");
@@ -229,17 +224,11 @@ export default function PatientDetailPage() {
       return;
     }
     
-    // Convert string patientId to number for legacy tables
-    const numericPatientId = parseInt(patientId, 10);
-    if (isNaN(numericPatientId)) {
-      toast({ variant: "destructive", title: "Error", description: "Invalid patient ID." });
-      return;
-    }
-    
+    // Use the UUID directly for the new customer_id-based system
     setIsAddingCallLog(true);
     try {
-      await addCallLog(
-        numericPatientId, 
+      await addCallLogByCustomerId(
+        patientId, 
         newCallOutcome, 
         newCallNotes.trim() || undefined,
         undefined, // removed call duration

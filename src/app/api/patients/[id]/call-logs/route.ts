@@ -8,17 +8,17 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const patientId = parseInt(params.id, 10);
+  const customerId = params.id; // This is now a UUID string
   
-  if (!patientId || isNaN(patientId)) {
-    return NextResponse.json({ error: 'Invalid patient ID' }, { status: 400 });
+  if (!customerId) {
+    return NextResponse.json({ error: 'Invalid customer ID' }, { status: 400 });
   }
 
   try {
     const { data, error } = await supabase
       .from('call_logs')
       .select('*')
-      .eq('patient_id', patientId)
+      .eq('customer_id', customerId)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -44,16 +44,15 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const patientId = parseInt(params.id, 10);
   const { userId } = getAuth(request);
-
+  const customerId = params.id; // This is now a UUID string
 
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   
-  if (!patientId || isNaN(patientId)) {
-    return NextResponse.json({ error: 'Invalid patient ID' }, { status: 400 });
+  if (!customerId) {
+    return NextResponse.json({ error: 'Invalid customer ID' }, { status: 400 });
   }
 
   try {
@@ -71,7 +70,7 @@ export async function POST(
     }
     
     const callLogData = {
-      patient_id: patientId,
+      customer_id: customerId,
       call_outcome,
       call_notes: call_notes || null,
       call_duration: call_duration || null,
@@ -98,7 +97,7 @@ export async function POST(
       created_at: data.created_at
     };
     
-    return NextResponse.json({ call_log }, { status: 201 });
+    return NextResponse.json({ call_log: callLog }, { status: 201 });
     
   } catch (error) {
     console.error('Call logs API error:', error);

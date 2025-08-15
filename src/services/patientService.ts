@@ -1244,7 +1244,8 @@ export async function fetchMonthlyExpirationChartData(): Promise<ExpirationDataP
 // ENHANCED: Call logging functions with better integration for license renewal tracking
 export interface CallLog {
   id: string;
-  patient_id: number;
+  patient_id?: number; // Legacy field, kept for backward compatibility
+  customer_id?: string; // New field for UUID-based customer system
   call_outcome: string;
   call_notes?: string;
   created_at: string;
@@ -1263,7 +1264,32 @@ export interface CallOutcomeType {
   sort_order: number;
 }
 
-// Fetch call logs for a specific patient
+// Fetch call logs for a specific patient by customer ID (UUID)
+export async function fetchCallLogsByCustomerId(customerId: string): Promise<CallLog[]> {
+  if (!customerId) {
+    console.error("[patientService] Invalid customer ID provided to fetchCallLogsByCustomerId:", customerId);
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('*')
+    .eq('customer_id', customerId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error(`[patientService] Error fetching call logs for customer ${customerId}:`, error);
+    throw new Error('Failed to fetch call logs.');
+  }
+
+  return (data || []).map(log => ({
+    ...log,
+    id: log.id.toString(),
+    created_at: log.created_at
+  })) as CallLog[];
+}
+
+// Fetch call logs for a specific patient by patient ID (legacy numeric)
 export async function fetchCallLogsByPatientId(patientId: number): Promise<CallLog[]> {
   if (isNaN(patientId)) {
     console.error("[patientService] Invalid patient ID provided to fetchCallLogsByPatientId:", patientId);
@@ -1288,7 +1314,47 @@ export async function fetchCallLogsByPatientId(patientId: number): Promise<CallL
   })) as CallLog[];
 }
 
-// Add a new call log
+// Add a new call log by customer ID (UUID)
+export async function addCallLogByCustomerId(
+  customerId: string, 
+  callOutcome: string, 
+  callNotes?: string,
+  callDuration?: number,
+  followUpDate?: string,
+  priorityLevel?: string
+): Promise<CallLog> {
+  if (!customerId || !callOutcome) {
+    throw new Error('Invalid input for adding call log.');
+  }
+
+  const callLogData: any = {
+    customer_id: customerId,
+    call_outcome: callOutcome,
+    call_notes: callNotes || null,
+    call_duration: callDuration || null,
+    follow_up_date: followUpDate || null,
+    priority_level: priorityLevel || 'normal'
+  };
+
+  const { data, error } = await supabase
+    .from('call_logs')
+    .insert([callLogData])
+    .select()
+    .single();
+
+  if (error) {
+    console.error('[patientService] Error adding call log:', error);
+    throw new Error('Failed to add call log.');
+  }
+
+  return {
+    ...data,
+    id: data.id.toString(),
+    created_at: data.created_at
+  } as CallLog;
+}
+
+// Add a new call log by patient ID (legacy numeric)
 export async function addCallLog(
   patientId: number, 
   callOutcome: string, 
@@ -1297,7 +1363,7 @@ export async function addCallLog(
   followUpDate?: string,
   priorityLevel?: string
 ): Promise<CallLog> {
-  if (isNaN(patientId) || !callOutcome.trim()) {
+  if (!patientId || !callOutcome) {
     throw new Error('Invalid input for adding call log.');
   }
 
