@@ -70,13 +70,12 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tooltip: "Dashboard" },
   { href: "/patients", label: "Patients", icon: Users, tooltip: "Patients" },
-  { href: "/admin/submissions", label: "Submissions", icon: ClipboardList, tooltip: "Submissions" },
-  { href: "/admin/sync", label: "BioTrack Sync", icon: Database, tooltip: "Synchronize data from BioTrack" },
-  { href: "/automations", label: "Automations", icon: Zap, tooltip: "Automations" },
   { href: "/communications", label: "Communications", icon: Phone, tooltip: "Communication Management" },
   { href: "/chat/wati", label: "WhatsApp", icon: MessageCircle, tooltip: "WATI WhatsApp Chat" },
   { href: "/reports", label: "Reports", icon: BarChartBig, tooltip: "Reports" },
-  { href: "/patients/demo", label: "Demo Patient AI", icon: FlaskConical, tooltip: "Demo Patient AI" },
+  { href: "/automations", label: "Automations", icon: Zap, tooltip: "Automations" },
+  { href: "/admin/sync", label: "BioTrack Sync", icon: Database, tooltip: "Synchronize data from BioTrack" },
+  { href: "/patients/demo", label: "Demo Patients AI", icon: FlaskConical, tooltip: "Demo Patient AI" },
 ];
 
 const settingsNavItems: NavItem[] = [
