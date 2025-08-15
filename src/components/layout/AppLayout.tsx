@@ -97,7 +97,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       '/communications',
       '/reports',
       '/patients/demo',
-      '/chat/wati', // Make WATI chat admin-only (optional)
     ];
     if (adminOnlyPages.includes(item.href)) {
       return isAdmin();
