@@ -275,14 +275,8 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
     `;
     
     // Solo aplicar filtros de licencia si las columnas existen
-    if (hasRedCard && hasRedCardYear && hasRedCardMonth) {
+    if (hasRedCard) {
       query += `
-        AND redcardyear IS NOT NULL 
-        AND redcardmonth IS NOT NULL
-        AND redcardyear != ''
-        AND redcardmonth != ''
-        AND CAST(redcardyear AS INTEGER) > 1900
-        AND CAST(redcardmonth AS INTEGER) BETWEEN 1 AND 12
         AND redcard IS NOT NULL 
         AND redcard != ''
         AND redcard LIKE 'PA%'
@@ -343,24 +337,38 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
     
     for (const row of biotrackData.rows) {
       try {
-        // Convertir timestamps de BioTrack a formato ISO para Supabase
+        // Convertir timestamps de BioTrack manteniendo formato bigint para Supabase
         const convertTimestamp = (timestamp: any) => {
           if (!timestamp) return null;
           try {
             // Si es un string con comas, limpiarlo
             const cleanTimestamp = timestamp.toString().replace(/,/g, '');
             const unixTime = parseInt(cleanTimestamp);
+            
+            // Validar que sea un número válido
             if (isNaN(unixTime)) return null;
             
-            // Convertir Unix timestamp a fecha ISO
-            const date = new Date(unixTime * 1000); // Multiplicar por 1000 para convertir a milisegundos
-            return date.toISOString();
+            // Validar que esté en un rango razonable (desde 1970 hasta 2030)
+            const minTimestamp = 0; // 1 enero 1970
+            const maxTimestamp = 1893456000; // 1 enero 2030
+            
+            if (unixTime < minTimestamp || unixTime > maxTimestamp) {
+              console.warn(`⚠️ Timestamp fuera de rango válido: ${unixTime} (${new Date(unixTime * 1000).toISOString()})`);
+              return null;
+            }
+            
+            // Mantener como bigint (timestamp Unix) para Supabase
+            return unixTime;
           } catch (error) {
-            console.warn(`Error converting timestamp ${timestamp}:`, error);
+            console.warn(`⚠️ Error converting timestamp ${timestamp}:`, error);
             return null;
           }
         };
 
+        // Obtener el nombre de ubicación mapeado
+        const config = getDatabaseConfig(databaseId);
+        const locationName = config?.locationMap?.[row.location?.toString()] || `Location ${row.location}`;
+        
         const customerData = {
           customerid: row.customerid,
           lastname: row.lastname,
@@ -382,6 +390,8 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
           modified_on_bt: getSafeValue(row, 'modified_on'),
           deleted: row.deleted,
           location: row.location,
+          location_name: locationName,
+          database_source: config?.name || 'Unknown',
           // Columnas opcionales con valores por defecto
           visits: getSafeValue(row, 'visits', 0),
           amountspent: getSafeValue(row, 'amountspent', 0),
@@ -396,8 +406,38 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
           redcardyear: getSafeValue(row, 'redcardyear'),
           redcardtime: convertTimestamp(getSafeValue(row, 'redcardtime')),
           // Calcular fecha de expiración de licencia médica si existe
-          license_exp_date: (getSafeValue(row, 'redcardyear') && getSafeValue(row, 'redcardmonth')) ? 
-            `${getSafeValue(row, 'redcardyear')}-${getSafeValue(row, 'redcardmonth').toString().padStart(2, '0')}-${(getSafeValue(row, 'redcardday') || '01').toString().padStart(2, '0')}` : null,
+          license_exp_date: (() => {
+            const year = getSafeValue(row, 'redcardyear');
+            const month = getSafeValue(row, 'redcardmonth');
+            const day = getSafeValue(row, 'redcardday') || '01';
+            
+            if (!year || !month) return null;
+            
+            try {
+              // Validar que año, mes y día sean números válidos
+              const yearNum = parseInt(year.toString());
+              const monthNum = parseInt(month.toString());
+              const dayNum = parseInt(day.toString());
+              
+              if (isNaN(yearNum) || isNaN(monthNum) || isNaN(dayNum)) return null;
+              
+              // Validar rangos razonables
+              if (yearNum < 1900 || yearNum > 2030) return null;
+              if (monthNum < 1 || monthNum > 12) return null;
+              if (dayNum < 1 || dayNum > 31) return null;
+              
+              // Crear fecha y validar que sea válida
+              const dateString = `${yearNum}-${monthNum.toString().padStart(2, '0')}-${dayNum.toString().padStart(2, '0')}`;
+              const testDate = new Date(dateString);
+              
+              if (isNaN(testDate.getTime())) return null;
+              
+              return dateString;
+            } catch (error) {
+              console.warn(`⚠️ Error validando fecha de licencia para customer ${row.customerid}:`, error);
+              return null;
+            }
+          })(),
         };
 
         // Log de la fecha de expiración para debug
@@ -405,7 +445,13 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
           `${customerData.redcardmonth}/${customerData.redcardyear}` : 'No disponible';
         const contactInfo = customerData.phone || customerData.email || 'Sin contacto';
         const licenseInfo = customerData.redcard || 'Sin licencia médica';
-        console.log(`👤 ${customerData.firstname} ${customerData.lastname} - Lic Médica: ${licenseInfo} - Expira: ${expDate} - Contacto: ${contactInfo}`);
+        
+        // Log adicional para debugging de fechas
+        if (customerData.license_exp_date) {
+          console.log(`👤 ${customerData.firstname} ${customerData.lastname} - Lic Médica: ${licenseInfo} - Expira: ${expDate} (${customerData.license_exp_date}) - Contacto: ${contactInfo} - Ubicación: ${customerData.location_name}`);
+        } else {
+          console.log(`👤 ${customerData.firstname} ${customerData.lastname} - Lic Médica: ${licenseInfo} - Expira: ${expDate} (Fecha inválida) - Contacto: ${contactInfo} - Ubicación: ${customerData.location_name}`);
+        }
 
         const { data: existingCustomer } = await supabase
           .from('customers')
@@ -450,6 +496,27 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
     }
 
     result.success = result.errors.length === 0;
+    
+    // Log resumen de errores para debugging
+    if (result.errors.length > 0) {
+      console.log(`⚠️  Resumen de errores en syncCustomers:`);
+      console.log(`   📊 Total de registros procesados: ${result.recordsProcessed}`);
+      console.log(`   ✅ Registros insertados: ${result.recordsInserted}`);
+      console.log(`   🔄 Registros actualizados: ${result.recordsUpdated}`);
+      console.log(`   ❌ Errores: ${result.errors.length}`);
+      
+      // Mostrar primeros 5 errores como ejemplo
+      const errorExamples = result.errors.slice(0, 5);
+      console.log(`   🔍 Ejemplos de errores:`);
+      errorExamples.forEach((error, index) => {
+        console.log(`      ${index + 1}. ${error}`);
+      });
+      
+      if (result.errors.length > 5) {
+        console.log(`      ... y ${result.errors.length - 5} errores más`);
+      }
+    }
+    
     await client.end();
     return result;
     
