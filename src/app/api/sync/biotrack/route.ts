@@ -337,8 +337,8 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
     
     for (const row of biotrackData.rows) {
       try {
-        // Convertir timestamps de BioTrack manteniendo formato bigint para Supabase
-        const convertTimestamp = (timestamp: any) => {
+        // Convertir timestamps de BioTrack según el tipo de campo
+        const convertTimestamp = (timestamp: any, fieldType: 'bigint' | 'timestamp' = 'bigint') => {
           if (!timestamp) return null;
           try {
             // Si es un string con comas, limpiarlo
@@ -357,8 +357,12 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
               return null;
             }
             
-            // Mantener como bigint (timestamp Unix) para Supabase
-            return unixTime;
+            // Según el tipo de campo, retornar bigint o ISO string
+            if (fieldType === 'bigint') {
+              return unixTime; // Mantener como bigint para Supabase
+            } else {
+              return new Date(unixTime * 1000).toISOString(); // Convertir a ISO para campos timestamp
+            }
           } catch (error) {
             console.warn(`⚠️ Error converting timestamp ${timestamp}:`, error);
             return null;
@@ -398,13 +402,13 @@ async function syncCustomers(databaseId: string, limit = 0): Promise<any> {
           points: getSafeValue(row, 'points'),
           discount: getSafeValue(row, 'discount'),
           membersince: getSafeValue(row, 'membersince'),
-          modified_on: getSafeValue(row, 'modified_on'),
+          modified_on: convertTimestamp(getSafeValue(row, 'modified_on'), 'timestamp'),
           // Licencia de paciente médica (opcional)
           redcard: getSafeValue(row, 'redcard'),
           redcardmonth: getSafeValue(row, 'redcardmonth'),
           redcardday: getSafeValue(row, 'redcardday'),
           redcardyear: getSafeValue(row, 'redcardyear'),
-          redcardtime: convertTimestamp(getSafeValue(row, 'redcardtime')),
+          redcardtime: convertTimestamp(getSafeValue(row, 'redcardtime'), 'timestamp'),
           // Calcular fecha de expiración de licencia médica si existe
           license_exp_date: (() => {
             const year = getSafeValue(row, 'redcardyear');
