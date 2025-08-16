@@ -806,6 +806,17 @@ export async function POST(request: NextRequest) {
     console.log(`🗄️  Base de datos seleccionada:`, databaseId);
     console.log(`📊 Parámetros recibidos:`, { syncType, tables, databaseId });
     
+    // Explicar la estrategia de sincronización
+    if (syncType === 'full') {
+      console.log(`🔄 ESTRATEGIA: Sync COMPLETO - Todos los registros sin límite`);
+      console.log(`   ⏱️  Tiempo estimado: 1-2 horas para 2+ servidores`);
+      console.log(`   📊 Datos: Histórico completo + actualizaciones`);
+    } else {
+      console.log(`🔄 ESTRATEGIA: Sync SAMPLE - Muestra de 1000 registros por tabla`);
+      console.log(`   ⏱️  Tiempo estimado: 5-10 minutos para pruebas rápidas`);
+      console.log(`   📊 Datos: Muestra representativa para validación`);
+    }
+    
     const startTime = Date.now();
     
     // Test de conexión primero
@@ -821,29 +832,49 @@ export async function POST(request: NextRequest) {
 
     // Sincronizar locations primero (necesarias para customers)
     if (tables.includes('locations')) {
-      results.push(await syncLocations(databaseId, 100));
+      const limit = syncType === 'full' ? 0 : 100; // Locations siempre limitadas para incremental
+      results.push(await syncLocations(databaseId, limit));
     }
 
     // Sincronizar customers
     if (tables.includes('customers')) {
-      const limit = syncType === 'full' ? 0 : 100; // 0 = sin límite para full sync
+      const limit = syncType === 'full' ? 0 : 1000; // 0 = sin límite para full sync, 1000 para sample
       results.push(await syncCustomers(databaseId, limit));
     }
 
     // Sincronizar products
     if (tables.includes('products')) {
-      const limit = syncType === 'full' ? 0 : 100; // 0 = sin límite para full sync
+      const limit = syncType === 'full' ? 0 : 1000; // 0 = sin límite para full sync, 1000 para sample
       results.push(await syncProducts(databaseId, limit));
     }
 
     // Sincronizar sales
     if (tables.includes('sales')) {
-      const limit = syncType === 'full' ? 0 : 100; // 0 = sin límite para datos históricos
+      const limit = syncType === 'full' ? 0 : 1000; // 0 = sin límite para datos históricos, 1000 para sample
       results.push(await syncSales(databaseId, limit));
     }
 
     const endTime = Date.now();
     const duration = endTime - startTime;
+
+    // Resumen de la estrategia ejecutada
+    const syncStrategy = syncType === 'full' ? {
+      type: 'COMPLETO',
+      description: 'Todos los registros sin límite',
+      timeEstimate: '1-2 horas para 2+ servidores',
+      dataScope: 'Histórico completo + actualizaciones'
+    } : {
+      type: 'SAMPLE',
+      description: 'Muestra de 1000 registros por tabla',
+      timeEstimate: '5-10 minutos para pruebas rápidas',
+      dataScope: 'Muestra representativa para validación'
+    };
+
+    console.log(`\n🎯 RESUMEN DE SINCRONIZACIÓN ${syncStrategy.type}:`);
+    console.log(`   📋 Descripción: ${syncStrategy.description}`);
+    console.log(`   ⏱️  Tiempo estimado: ${syncStrategy.timeEstimate}`);
+    console.log(`   📊 Alcance de datos: ${syncStrategy.dataScope}`);
+    console.log(`   🕐 Tiempo real ejecutado: ${Math.round(duration / 1000)} segundos`);
 
     const summary = {
       totalRecords: results.reduce((sum, r) => sum + r.recordsProcessed, 0),
@@ -896,6 +927,13 @@ export async function POST(request: NextRequest) {
       results,
       summary,
       syncType,
+      syncStrategy: {
+        type: syncStrategy.type,
+        description: syncStrategy.description,
+        timeEstimate: syncStrategy.timeEstimate,
+        dataScope: syncStrategy.dataScope,
+        actualDuration: Math.round(duration / 1000)
+      },
       tables,
       databaseId,
       duration,
