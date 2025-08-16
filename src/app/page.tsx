@@ -26,7 +26,7 @@ export default function LoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (!authLoading && user) {
-      router.push('/dashboard');
+      router.push('/patients');
     }
   }, [user, authLoading, router]);
 

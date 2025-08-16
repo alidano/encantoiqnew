@@ -65,13 +65,15 @@ interface NavItem {
   label: string;
   icon: React.ElementType;
   tooltip?: string;
+  isMain?: boolean;
 }
 
 const navItems: NavItem[] = [
+  { href: "/patients", label: "Patients", icon: Users, tooltip: "Patients (Main Page)", isMain: true },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, tooltip: "Dashboard" },
-  { href: "/patients", label: "Patients", icon: Users, tooltip: "Patients" },
   { href: "/communications", label: "Communications", icon: Phone, tooltip: "Communication Management" },
   { href: "/chat/wati", label: "WhatsApp", icon: MessageCircle, tooltip: "WATI WhatsApp Chat" },
+  { href: "/admin/submissions", label: "Submissions", icon: ClipboardList, tooltip: "Submissions" },
   { href: "/reports", label: "Reports", icon: BarChartBig, tooltip: "Reports" },
   { href: "/automations", label: "Automations", icon: Zap, tooltip: "Automations" },
   { href: "/admin/sync", label: "BioTrack Sync", icon: Database, tooltip: "Synchronize data from BioTrack" },
@@ -93,6 +95,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     // Only show admin-only routes to admin users
     const adminOnlyPages = [
       '/admin/sync',
+      '/admin/submissions',
       '/automations',
       '/communications',
       '/reports',
@@ -129,10 +132,15 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <SidebarMenuButton
             isActive={pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href))}
             tooltip={item.tooltip || item.label}
-            className="w-full"
+            className={`w-full ${item.isMain ? 'border-l-4 border-l-primary bg-primary/5' : ''}`}
           >
-            <item.icon className="h-5 w-5" />
-            <span>{item.label}</span>
+            <item.icon className={`h-5 w-5 ${item.isMain ? 'text-primary' : ''}`} />
+            <span className={item.isMain ? 'font-semibold text-primary' : ''}>{item.label}</span>
+            {item.isMain && (
+              <span className="ml-auto text-xs bg-primary text-primary-foreground px-2 py-1 rounded-full">
+                MAIN
+              </span>
+            )}
           </SidebarMenuButton>
         </Link>
       )}
@@ -142,7 +150,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const sidebarContent = (
     <>
       <SidebarHeader className="p-4">
-        <Link href="/dashboard" className="flex items-center gap-2 group">
+        <Link href="/patients" className="flex items-center gap-2 group">
            <Image
             src={logoUrl}
             alt="EncantoIQ Logo"

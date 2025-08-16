@@ -33,7 +33,7 @@ const PatientsPage = () => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = React.useState('');
   const [filters, setFilters] = React.useState({
-    expirationRange: 'all',
+    expirationRange: 'all', // 'all' ahora significa "Most Urgent First"
     location: 'all'
   });
   const [selectedRows, setSelectedRows] = React.useState<(string | number)[]>([]);
@@ -147,7 +147,9 @@ const PatientsPage = () => {
   const getDaysBadgeClass = (days?: number) => {
     if (days === undefined || days === null || isNaN(days)) return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 border-gray-500/50';
     if (days <= 0) return 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 border-red-500/50';
-    if (days <= 30) return 'bg-accent text-accent-foreground border-accent/50';
+    if (days === 0) return 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300 border-orange-500/50';
+    if (days <= 7) return 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 border-red-500/50';
+    if (days <= 30) return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300 border-yellow-500/50';
     if (days <= 60) return 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300 border-blue-500/50';
     if (days <= 90) return 'bg-primary/20 text-primary dark:bg-primary/30 border-primary/50';
     return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 border-gray-500/50';
@@ -180,11 +182,16 @@ const PatientsPage = () => {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-6 px-6 py-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-          <h1 className="text-3xl font-bold tracking-tight">
-            Patients {isLoading ? <Loader2 className="inline h-6 w-6 animate-spin" /> : `(${totalPatients.toLocaleString()} total)`}
-          </h1>
+          <div className="flex flex-col gap-2">
+            <h1 className="text-3xl font-bold tracking-tight">
+              Patients {isLoading ? <Loader2 className="inline h-6 w-6 animate-spin" /> : `(${totalPatients.toLocaleString()} total)`}
+            </h1>
+            <p className="text-muted-foreground">
+              🏠 Welcome to EncantoIQ - Your main dashboard for patient management
+            </p>
+          </div>
           <div className="flex gap-2">
             <Button variant="outline"><Download className="mr-2 h-4 w-4" /> Export</Button>
             <Button><PlusCircle className="mr-2 h-4 w-4" /> Add New Patient</Button>
@@ -192,6 +199,44 @@ const PatientsPage = () => {
         </div>
 
         <div className="space-y-4 p-4 border rounded-lg bg-card shadow">
+          <div className="text-sm text-muted-foreground mb-2">
+            💡 Patients are automatically sorted by urgency: those expiring today appear first, followed by those expiring soonest.
+          </div>
+          {!isLoading && allPatients.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {(() => {
+                const urgent = allPatients.filter(p => p.days_to_expiration !== undefined && p.days_to_expiration !== -9999 && p.days_to_expiration <= 7 && p.days_to_expiration > 0).length;
+                const today = allPatients.filter(p => p.days_to_expiration !== undefined && p.days_to_expiration !== -9999 && p.days_to_expiration === 0).length;
+                const expired = allPatients.filter(p => p.days_to_expiration !== undefined && p.days_to_expiration !== -9999 && p.days_to_expiration <= 0).length;
+                const soon = allPatients.filter(p => p.days_to_expiration !== undefined && p.days_to_expiration !== -9999 && p.days_to_expiration > 7 && p.days_to_expiration <= 30).length;
+                
+                return (
+                  <>
+                    {expired > 0 && (
+                      <Badge variant="outline" className="bg-red-100 text-red-700 border-red-500">
+                        {expired} Expired
+                      </Badge>
+                    )}
+                    {today > 0 && (
+                      <Badge variant="outline" className="bg-orange-100 text-orange-700 border-orange-500">
+                        {today} Expire Today
+                      </Badge>
+                    )}
+                    {urgent > 0 && (
+                      <Badge variant="outline" className="bg-red-100 text-red-700 border-red-500">
+                        {urgent} Urgent (≤7 days)
+                      </Badge>
+                    )}
+                    {soon > 0 && (
+                      <Badge variant="outline" className="bg-yellow-100 text-yellow-700 border-yellow-500">
+                        {soon} Soon (≤30 days)
+                      </Badge>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
           <div className="flex flex-col md:flex-row gap-4">
             {isClientMounted ? (
               <div className="relative flex-grow">
@@ -218,7 +263,7 @@ const PatientsPage = () => {
                   <SelectValue placeholder="Expiration Range" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Active (Non-Expired)</SelectItem>
+                  <SelectItem value="all">Most Urgent First</SelectItem>
                   <SelectItem value="expiring_today">Expiring Today</SelectItem>
                   <SelectItem value="1to60days">1-60 Days (Most Urgent)</SelectItem>
                   <SelectItem value="61to120days">61-120 Days</SelectItem>
@@ -280,11 +325,16 @@ const PatientsPage = () => {
                 </TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>MMJ Card</TableHead>
+                <TableHead>Patient Licence</TableHead>
                 <TableHead>Expiration</TableHead>
-                <TableHead className="text-center">Days</TableHead>
+                <TableHead className="text-center">
+                  <div className="flex items-center justify-center gap-1">
+                    <span>Days</span>
+                    <span className="text-xs text-muted-foreground">(Urgency)</span>
+                  </div>
+                </TableHead>
                 <TableHead>Location</TableHead>
-                <TableHead className="text-right w-[180px]">Actions</TableHead>
+                <TableHead className="text-right w-[120px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -326,17 +376,25 @@ const PatientsPage = () => {
                     <TableCell>{formatExpirationDate(patient.license_exp_date)}</TableCell>
                     <TableCell className="text-center">
                       <Badge variant="outline" className={`px-2 py-0.5 text-xs border whitespace-nowrap ${getDaysBadgeClass(patient.days_to_expiration)}`}>
-                        {patient.days_to_expiration === undefined || patient.days_to_expiration === null || isNaN(patient.days_to_expiration) ? 'N/A' : patient.days_to_expiration <= 0 ? 'Expired' : `${patient.days_to_expiration} days`}
+                        {patient.days_to_expiration === undefined || patient.days_to_expiration === null || isNaN(patient.days_to_expiration) ? 'N/A' : 
+                         patient.days_to_expiration <= 0 ? 'EXPIRED' : 
+                         patient.days_to_expiration === 0 ? 'EXPIRES TODAY' :
+                         patient.days_to_expiration <= 7 ? `${patient.days_to_expiration} days (URGENT)` :
+                         patient.days_to_expiration <= 30 ? `${patient.days_to_expiration} days (SOON)` :
+                         `${patient.days_to_expiration} days`}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-xs truncate max-w-[120px]">{patient.dispensary_name?.replace('Encanto Giving Tree LLC ', '')}</TableCell>
+                    <TableCell className="text-xs truncate max-w-[120px]">{patient.dispensary_name || 'Unknown Location'}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex gap-1 justify-end">
                         <Link href={`/patients/${patient.id}`} passHref>
-                          <Button variant="ghost" size="icon" aria-label="View patient"><Eye className="h-4 w-4" /></Button>
+                          <Button variant="ghost" size="icon" aria-label="View patient" title="View patient details">
+                            <Eye className="h-4 w-4" />
+                          </Button>
                         </Link>
-                        <Button variant="ghost" size="icon" aria-label="Edit patient"><Edit3 className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" aria-label="Contact patient"><MessageSquarePlus className="h-4 w-4" /></Button>
+                        <div className="text-xs text-muted-foreground flex items-center px-1">
+                          SMS soon
+                        </div>
                       </div>
                     </TableCell>
                   </TableRow>

@@ -61,42 +61,42 @@ body {
   }
 
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
+    --background: 220 13% 18%; /* Dark gray instead of pure black */
+    --foreground: 0 0% 95%;
 
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
+    --card: 220 13% 22%; /* Slightly lighter dark gray for cards */
+    --card-foreground: 0 0% 95%;
 
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
+    --popover: 220 13% 22%; /* Match card background */
+    --popover-foreground: 0 0% 95%;
 
     --primary: 118 50% 48%; /* Slightly lighter green for dark mode */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
+    --secondary: 220 13% 25%; /* Medium dark gray */
+    --secondary-foreground: 0 0% 95%;
 
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
+    --muted: 220 13% 25%; /* Match secondary */
+    --muted-foreground: 220 9% 75%;
 
     --accent: 266 53% 68%; /* Slightly lighter purple #a885d9 for dark mode */
-    --accent-foreground: 240 10% 3.9%;
+    --accent-foreground: 0 0% 95%;
 
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
+    --border: 220 13% 28%; /* Slightly darker than secondary */
+    --input: 220 13% 25%; /* Match secondary */
     --ring: 118 50% 48%;
 
     /* Sidebar specific variables for dark mode */
-    --sidebar-background: 240 6% 10%; /* Darker background for sidebar */
-    --sidebar-foreground: 0 0% 80%; /* Lighter text for dark sidebar */
+    --sidebar-background: 220 13% 20%; /* Dark gray for sidebar */
+    --sidebar-foreground: 0 0% 85%; /* Lighter text for dark sidebar */
     --sidebar-primary: 118 50% 48%; /* Primary color for active/hover */
     --sidebar-primary-foreground: 0 0% 100%; /* White text on primary */
     --sidebar-accent: 266 53% 68%; /* Slightly lighter purple #a885d9 for dark mode */
-    --sidebar-accent-foreground: 240 10% 3.9%;
-    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 220 13% 28%; /* Match general border */
     --sidebar-ring: 118 50% 48%;
 
     --chart-1: 220 70% 50%;
@@ -107,6 +107,14 @@ body {
 
     --whatsapp-green: 145 58% 44%; /* Dark mode WhatsApp green */
     --whatsapp-message-sent-bg: 145 58% 31%; /* Dark mode sent message background */
+    
+    /* Additional dark mode colors for better UX */
+    --hover: 220 13% 30%; /* Hover state color */
+    --active: 220 13% 35%; /* Active state color */
+    --focus: 118 50% 48%; /* Focus ring color */
+    --selection: 220 13% 40%; /* Text selection background */
+    --scrollbar: 220 13% 30%; /* Scrollbar color */
+    --scrollbar-thumb: 220 13% 40%; /* Scrollbar thumb color */
   }
 }
 
@@ -116,5 +124,46 @@ body {
   }
   body {
     @apply bg-background text-foreground;
+  }
+  
+  /* Custom scrollbar styles for dark mode */
+  .dark ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  .dark ::-webkit-scrollbar-track {
+    background: hsl(var(--scrollbar));
+    border-radius: 4px;
+  }
+  
+  .dark ::-webkit-scrollbar-thumb {
+    background: hsl(var(--scrollbar-thumb));
+    border-radius: 4px;
+  }
+  
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--hover));
+  }
+  
+  /* Text selection styles for dark mode */
+  .dark ::selection {
+    background: hsl(var(--selection));
+    color: hsl(var(--foreground));
+  }
+  
+  /* Focus ring improvements for dark mode */
+  .dark *:focus-visible {
+    outline: 2px solid hsl(var(--focus));
+    outline-offset: 2px;
+  }
+  
+  /* Hover state improvements for interactive elements */
+  .dark .hover\:bg-secondary:hover {
+    background-color: hsl(var(--hover));
+  }
+  
+  .dark .hover\:bg-muted:hover {
+    background-color: hsl(var(--hover));
   }
 }

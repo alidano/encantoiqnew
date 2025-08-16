@@ -114,7 +114,7 @@ function transformSupabaseRowToPatient(rowData: any): Patient | null {
     smsoptin: true, // Default - customers table doesn't have this
     drivers_license: undefined, // Not in customers table
     license_expiration: undefined, // Not in customers table
-    dispensary_name: (rowData.locationName || `Location ${rowData.location}` || 'Unknown Location').toString(),
+    dispensary_name: (rowData.locationName || rowData.location_name || `Location ${rowData.location}` || 'Unknown Location').toString(),
     customer_since: customerSinceDate,
     member_since: rowData.createdate ? rowData.createdate.toString() : undefined,
     number_of_visits: 0, // Default - not in customers table
@@ -160,7 +160,7 @@ export async function fetchPatients(options = {}) {
       phone, email, cell, address1, address2, city, state, zip,
       licensenum, licenseexpmonth, licenseexpyear,
       redcard, redcardmonth, redcardday, redcardyear, redcardtime,
-      createdate, modified_on_bt, deleted, location, ismember
+      createdate, modified_on_bt, deleted, location, ismember, location_name
     `, { count: 'exact' }) // Get total count with specific fields
     .eq('deleted', 0) // Only non-deleted customers
     .not('customerid', 'is', null) // Filter out null customerids
@@ -293,7 +293,7 @@ export async function fetchPatients(options = {}) {
   // Add location names to customer data
   const customersWithLocations = validData.map(customer => ({
     ...customer,
-    locationName: locationMap.get(customer.location) || `Location ${customer.location}` || 'Unknown Location'
+    locationName: (customer as any).location_name || locationMap.get(customer.location) || `Location ${customer.location}` || 'Unknown Location'
   }));
 
   const transformedPatients = customersWithLocations
@@ -2107,5 +2107,101 @@ export async function fetchDispensaryPerformanceSummary(): Promise<{
       periodStart: '',
       periodEnd: ''
     };
+  }
+}
+
+// NEW: Function to get the most recent contact information from submissions
+export async function fetchLatestContactInfoFromSubmissions(patient: Patient): Promise<{
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  lastSubmissionDate?: string;
+  submissionCount: number;
+  isContactInfoUpdated: boolean;
+} | null> {
+  if (!patient) return null;
+
+  try {
+    // Build search conditions similar to fetchSubmissionsForPatient
+    const orConditions: string[] = [];
+    if (patient.id) orConditions.push(`patient_id.eq.${patient.id}`);
+    if (patient.mmj_card) orConditions.push(`mmj_card_number.eq.${patient.mmj_card}`);
+    if (patient.email && patient.email.trim() !== '') orConditions.push(`email.ilike.%${patient.email.trim()}%`);
+    
+    if (patient.cell && patient.cell.trim() !== '') {
+      const numericCell = patient.cell.replace(/\D/g, '');
+      if (numericCell) {
+        orConditions.push(`phone_number.eq.${numericCell}`);
+      }
+    }
+
+    if (orConditions.length === 0) {
+      console.warn("[patientService] No valid identifiers to fetch contact info from submissions for patient:", patient);
+      return null;
+    }
+
+    // Get the most recent submission with contact information
+    const { data, error } = await supabase
+      .from('license_submissions')
+      .select(`
+        id,
+        submitted_at,
+        email,
+        phone_number,
+        address1,
+        city,
+        state,
+        zip_code,
+        first_name,
+        last_name
+      `)
+      .or(orConditions.join(','))
+      .order('submitted_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error(`[patientService] Error fetching latest contact info from submissions for patient ${patient.id || patient.email}:`, error);
+      return null;
+    }
+
+    if (!data || data.length === 0) {
+      return {
+        submissionCount: 0,
+        isContactInfoUpdated: false
+      };
+    }
+
+    const latestSubmission = data[0];
+    
+    // Get total submission count for this patient
+    const { count: submissionCount } = await supabase
+      .from('license_submissions')
+      .select('*', { count: 'exact', head: true })
+      .or(orConditions.join(','));
+
+    // Check if contact info is different from patient record
+    const isEmailUpdated = latestSubmission.email && latestSubmission.email !== patient.email;
+    const isPhoneUpdated = latestSubmission.phone_number && 
+      latestSubmission.phone_number.toString() !== patient.cell.replace(/\D/g, '');
+    const isAddressUpdated = latestSubmission.address1 && latestSubmission.address1 !== patient.address1;
+
+    return {
+      email: latestSubmission.email || undefined,
+      phone: latestSubmission.phone_number ? latestSubmission.phone_number.toString() : undefined,
+      address: latestSubmission.address1 || undefined,
+      city: latestSubmission.city || undefined,
+      state: latestSubmission.state || undefined,
+      zip: latestSubmission.zip_code ? latestSubmission.zip_code.toString() : undefined,
+      lastSubmissionDate: latestSubmission.submitted_at || undefined,
+      submissionCount: submissionCount || 0,
+      isContactInfoUpdated: isEmailUpdated || isPhoneUpdated || isAddressUpdated
+    };
+
+  } catch (error) {
+    console.error(`[patientService] Error in fetchLatestContactInfoFromSubmissions:`, error);
+    return null;
   }
 }

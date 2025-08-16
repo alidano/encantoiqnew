@@ -9,7 +9,7 @@ import { ArrowLeft, Loader2, AlertTriangle, UserCircle, Mail, Phone, CalendarDay
 import Link from "next/link";
 import Image from "next/image";
 import { useParams } from 'next/navigation';
-import { fetchPatientById, fetchSubmissionsForPatient, fetchCallLogsByCustomerId, addCallLogByCustomerId, fetchCallOutcomeTypes, type CallLog, type CallOutcomeType } from '@/services/patientService';
+import { fetchPatientById, fetchSubmissionsForPatient, fetchCallLogsByCustomerId, addCallLogByCustomerId, fetchCallOutcomeTypes, fetchLatestContactInfoFromSubmissions, type CallLog, type CallOutcomeType } from '@/services/patientService';
 import type { Patient, LicenseSubmission } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { format, parseISO, isValid } from 'date-fns';
@@ -30,9 +30,6 @@ export default function PatientDetailPage() {
   const [patient, setPatient] = React.useState<Patient | null>(null);
   const [isLoadingPatient, setIsLoadingPatient] = React.useState(true);
   const [patientError, setPatientError] = React.useState<string | null>(null);
-
-  const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
-  const [isUploading, setIsUploading] = React.useState(false);
 
   const [licenseSubmissions, setLicenseSubmissions] = React.useState<LicenseSubmission[]>([]);
   const [isLoadingSubmissions, setIsLoadingSubmissions] = React.useState(false);
@@ -56,6 +53,20 @@ export default function PatientDetailPage() {
   const [newFollowUpDate, setNewFollowUpDate] = React.useState('');
   const [callOutcomeTypes, setCallOutcomeTypes] = React.useState<CallOutcomeType[]>([]);
 
+  // Contact info from submissions state
+  const [submissionContactInfo, setSubmissionContactInfo] = React.useState<{
+    email?: string;
+    phone?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    lastSubmissionDate?: string;
+    submissionCount: number;
+    isContactInfoUpdated: boolean;
+  } | null>(null);
+  const [isLoadingContactInfo, setIsLoadingContactInfo] = React.useState(false);
+
   const loadPatientData = React.useCallback(async () => {
     if (!patientId) {
       setPatientError("Invalid patient ID.");
@@ -69,6 +80,7 @@ export default function PatientDetailPage() {
       if (fetchedPatient) {
         setPatient(fetchedPatient);
         loadSubmissions(fetchedPatient); 
+        loadSubmissionContactInfo(fetchedPatient);
         if (fetchedPatient.email) {
           loadEmailHistory(fetchedPatient.email); // Load MailWizz email history
         }
@@ -98,9 +110,21 @@ export default function PatientDetailPage() {
 
     } catch (error) {
       setSubmissionsError("Failed to load license submissions.");
-      console.error("Error loading submissions: ", error);
     } finally {
       setIsLoadingSubmissions(false);
+    }
+  }, []);
+
+  const loadSubmissionContactInfo = React.useCallback(async (currentPatient: Patient | null) => {
+    if (!currentPatient) return;
+    setIsLoadingContactInfo(true);
+    try {
+      const contactInfo = await fetchLatestContactInfoFromSubmissions(currentPatient);
+      setSubmissionContactInfo(contactInfo);
+    } catch (error) {
+      console.error('Error loading submission contact info:', error);
+    } finally {
+      setIsLoadingContactInfo(false);
     }
   }, []);
 
@@ -287,9 +311,15 @@ export default function PatientDetailPage() {
 
   const formatDateSafe = (dateString?: string | null, includeTime: boolean = false) => {
     if (!dateString || !isValid(parseISO(dateString))) return "N/A";
-    return format(parseISO(dateString), includeTime ? 'MM/dd/yyyy hh:mm a' : 'MM/dd/yyyy');
+    return format(parseISO(dateString), includeTime ? 'MM/dd/yyyy HH:mm' : 'MM/dd/yyyy');
   };
-  
+
+  const renderRenewalStars = (count: number) => {
+    return Array.from({ length: Math.min(count, 5) }, (_, i) => (
+      <Star key={i} className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+    ));
+  };
+
   const getDaysBadgeClass = (days?: number) => {
     if (days === undefined) return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 border-gray-500/50';
     if (days <= 0) return 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300 border-red-500/50';
@@ -306,19 +336,6 @@ export default function PatientDetailPage() {
     if (engagement.opened) return { score: 'Medium', trend: 'up', color: 'text-blue-600' };
     if (engagement.delivered) return { score: 'Low', trend: 'neutral', color: 'text-gray-600' };
     return { score: 'Unknown', trend: 'neutral', color: 'text-gray-400' };
-  };
-
-  const renderRenewalStars = (count: number) => {
-    const maxStars = 3;
-    const stars = Math.min(count, maxStars);
-    const starIcons = [];
-    for (let i = 0; i < stars; i++) {
-      starIcons.push(<Star key={i} className="h-4 w-4 fill-yellow-400 text-yellow-500" />);
-    }
-    if (count > maxStars) {
-        starIcons.push(<span key="plus" className="text-xs ml-1">+{count - maxStars}</span>);
-    }
-    return starIcons.length > 0 ? <div className="flex items-center gap-0.5">{starIcons}</div> : null;
   };
 
   const getCallOutcomeBadgeClass = (outcome: string): string => {
@@ -393,7 +410,7 @@ export default function PatientDetailPage() {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-6 px-6 py-8">
         <div>
           <Link href="/patients" legacyBehavior>
             <Button variant="outline" className="mb-4">
@@ -431,12 +448,36 @@ export default function PatientDetailPage() {
               </div>
             </div>
           )}
+
+          {/* Contact Info Update Alert */}
+          {submissionContactInfo?.isContactInfoUpdated && (
+            <div className="mt-4 p-4 rounded-lg border-2 bg-blue-50 border-blue-200 text-blue-800">
+              <div className="flex items-center gap-3">
+                <Mail className="h-6 w-6" />
+                <div>
+                  <h3 className="font-semibold text-lg">Updated Contact Information Available</h3>
+                  <p>
+                    The patient has submitted a license form with updated contact information. 
+                    Check the "Contact Info from Submission Form" section below for the most current details.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         
         <div className="grid md:grid-cols-3 gap-6">
           <Card className="md:col-span-2">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><UserCircle className="h-5 w-5 text-primary"/> Personal Information</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <UserCircle className="h-5 w-5 text-primary"/> 
+                Personal Information
+                {submissionContactInfo?.isContactInfoUpdated && (
+                  <Badge className="ml-2 bg-orange-100 text-orange-700 border-orange-300">
+                    Check Submission Form Below
+                  </Badge>
+                )}
+              </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 text-sm">
               <div><span className="font-medium text-muted-foreground">Full Name:</span> {patient.firstname} {patient.middlename || ''} {patient.lastname}</div>
@@ -481,12 +522,91 @@ export default function PatientDetailPage() {
             </CardContent>
           </Card>
 
+          {/* NEW: Contact Info from Submission Form */}
+          {submissionContactInfo && submissionContactInfo.submissionCount > 0 && (
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Mail className="h-5 w-5 text-primary"/> 
+                  Contact Info from Submission Form
+                  {submissionContactInfo.isContactInfoUpdated && (
+                    <Badge className="ml-2 bg-orange-100 text-orange-700 border-orange-300">
+                      Updated Info Available
+                    </Badge>
+                  )}
+                </CardTitle>
+                <CardDescription>
+                  Most recent contact information from license submission forms. 
+                  This may be more current than the patient record above.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoadingContactInfo ? (
+                  <div className="flex items-center text-muted-foreground">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading submission contact info...
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 text-sm">
+                    <div>
+                      <span className="font-medium text-muted-foreground">Email:</span> 
+                      {submissionContactInfo.email ? (
+                        <a href={`mailto:${submissionContactInfo.email}`} className="text-blue-600 hover:underline ml-2">
+                          {submissionContactInfo.email}
+                        </a>
+                      ) : (
+                        <span className="text-red-500 ml-2">Not provided</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-medium text-muted-foreground">Phone:</span> 
+                      {submissionContactInfo.phone ? (
+                        <a href={`tel:${submissionContactInfo.phone}`} className="text-blue-600 hover:underline ml-2 font-mono">
+                          {submissionContactInfo.phone}
+                        </a>
+                      ) : (
+                        <span className="text-red-500 ml-2">Not provided</span>
+                      )}
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="font-medium text-muted-foreground">Address:</span> 
+                      {submissionContactInfo.address ? (
+                        <span className="ml-2">
+                          {submissionContactInfo.address}
+                          {submissionContactInfo.city && `, ${submissionContactInfo.city}`}
+                          {submissionContactInfo.state && `, ${submissionContactInfo.state}`}
+                          {submissionContactInfo.zip && ` ${submissionContactInfo.zip}`}
+                        </span>
+                      ) : (
+                        <span className="text-red-500 ml-2">Not provided</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="font-medium text-muted-foreground">Last Submission:</span> 
+                      <span className="ml-2">
+                        {submissionContactInfo.lastSubmissionDate ? 
+                          formatDateSafe(submissionContactInfo.lastSubmissionDate, true) : 
+                          'Unknown'
+                        }
+                      </span>
+                    </div>
+                    <div>
+                      <span className="font-medium text-muted-foreground">Total Submissions:</span> 
+                      <Badge variant="outline" className="ml-2">
+                        {submissionContactInfo.submissionCount}
+                      </Badge>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Landmark className="h-5 w-5 text-primary"/> MMJ License (Current)</CardTitle>
+              <CardTitle className="flex items-center gap-2"><Landmark className="h-5 w-5 text-primary"/> Patient License (Current)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <div><span className="font-medium text-muted-foreground">MMJ Card #:</span> {patient.mmj_card}</div>
+              <div><span className="font-medium text-muted-foreground">Patient License #:</span> {patient.mmj_card}</div>
               <div><span className="font-medium text-muted-foreground">Expiration:</span> {formatDateSafe(patient.mmj_card_expiration)}</div>
               <div>
                 <span className="font-medium text-muted-foreground">Status:</span>
@@ -498,124 +618,102 @@ export default function PatientDetailPage() {
                 <span className="font-medium text-muted-foreground">Processed Renewals:</span>
                 <span className="ml-2">{processedRenewalCount > 0 ? renderRenewalStars(processedRenewalCount) : "0"}</span>
               </div>
-               {patient.drivers_license && <div><span className="font-medium text-muted-foreground">Driver's License:</span> {patient.drivers_license}</div>}
-               {patient.license_expiration && <div><span className="font-medium text-muted-foreground">License Exp:</span> {formatDateSafe(patient.license_expiration)}</div>}
-              
-              {patient.license_photo_url && (
-                <div className="mt-4">
-                  <Label className="font-medium text-muted-foreground">License Photo:</Label>
-                  <div className="mt-1 relative w-full aspect-[3/2] rounded-md overflow-hidden border">
-                    <Image src={patient.license_photo_url} alt="MMJ License Photo" fill style={{objectFit: "contain"}} data-ai-hint="license document"/>
-                  </div>
-                </div>
-              )}
-              <div className="mt-4 space-y-2">
-                <Label htmlFor="license-upload" className="font-medium text-muted-foreground">
-                  {patient.license_photo_url ? "Replace License Photo:" : "Upload License Photo:"}
-                </Label>
-                <Input id="license-upload" type="file" accept="image/*" onChange={handleFileSelect} className="text-xs"/>
-                {selectedFile && (
-                    <p className="text-xs text-muted-foreground">Selected: {selectedFile.name}</p>
-                )}
-                <Button onClick={handleFileUpload} disabled={isUploading || !selectedFile} className="w-full mt-2 text-xs" size="sm">
-                  {isUploading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <FileImage className="mr-2 h-3 w-3" />}
-                  {isUploading ? "Uploading..." : "Upload Photo"}
-                </Button>
-              </div>
+              {patient.drivers_license && <div><span className="font-medium text-muted-foreground">Driver's License:</span> {patient.drivers_license}</div>}
+              {patient.license_expiration && <div><span className="font-medium text-muted-foreground">License Exp:</span> {formatDateSafe(patient.license_expiration)}</div>}
             </CardContent>
           </Card>
         </div>
         
         <Card>
-            <CardHeader>
-                <CardTitle className="flex items-center gap-2"><History className="h-5 w-5 text-primary"/> License Submission History</CardTitle>
-                <CardDescription>History of license submissions for this patient.</CardDescription>
-            </CardHeader>
-            <CardContent>
-                {isLoadingSubmissions ? (
-                    <div className="flex items-center text-muted-foreground">
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading submission history...
-                    </div>
-                ) : submissionsError ? (
-                    <div className="text-destructive flex items-center gap-1"><AlertTriangle className="h-4 w-4"/> {submissionsError}</div>
-                ) : licenseSubmissions.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No license submission history found for this patient.</p>
-                ) : (
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Submitted</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>MMJ Card #</TableHead>
-                                    <TableHead>New Expiration</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Processed</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {licenseSubmissions.map(sub => (
-                                    <TableRow key={sub.id}>
-                                        <TableCell className="text-xs">{formatDateSafe(sub.submitted_at, true)}</TableCell>
-                                        <TableCell>
-                                            <Badge variant={sub.submission_type === 'RENEWAL' ? 'default' : 'secondary'}>
-                                                {sub.submission_type === 'RENEWAL' ? 'Renewal' : 'New License'}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell>{sub.mmj_card_number}</TableCell>
-                                        <TableCell>{formatDateSafe(sub.new_mmj_expiration_date)}</TableCell>
-                                        <TableCell>
-                                            <Badge variant={
-                                                sub.status === 'PROCESSED' ? 'default' : 
-                                                sub.status === 'PENDING_REVIEW' ? 'outline' : 
-                                                'destructive'
-                                            } className={sub.status === 'PROCESSED' ? 'bg-green-100 text-green-700' : sub.status === 'PENDING_REVIEW' ? '' : 'bg-red-100 text-red-700'}>
-                                                {sub.status.replace(/_/g, ' ')}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-xs">{sub.processed_at ? formatDateSafe(sub.processed_at, true) : 'N/A'}</TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </div>
-                )}
-            </CardContent>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><History className="h-5 w-5 text-primary"/> License Submission History</CardTitle>
+            <CardDescription>History of license submissions for this patient.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoadingSubmissions ? (
+              <div className="flex items-center text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading submission history...
+              </div>
+            ) : submissionsError ? (
+              <div className="text-destructive flex items-center gap-1"><AlertTriangle className="h-4 w-4"/> {submissionsError}</div>
+            ) : licenseSubmissions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No license submission history found for this patient.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Submitted</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Patient License #</TableHead>
+                      <TableHead>New Expiration</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Processed</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {licenseSubmissions.map(sub => (
+                      <TableRow key={sub.id}>
+                        <TableCell className="text-xs">{formatDateSafe(sub.submitted_at, true)}</TableCell>
+                        <TableCell>
+                          <Badge variant={sub.submission_type === 'RENEWAL' ? 'default' : 'secondary'}>
+                            {sub.submission_type === 'RENEWAL' ? 'Renewal' : 'New License'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{sub.mmj_card_number}</TableCell>
+                        <TableCell>{formatDateSafe(sub.new_mmj_expiration_date)}</TableCell>
+                        <TableCell>
+                          <Badge variant={
+                            sub.status === 'PROCESSED' ? 'default' : 
+                            sub.status === 'PENDING_REVIEW' ? 'outline' : 
+                            'destructive'
+                          } className={sub.status === 'PROCESSED' ? 'bg-green-100 text-green-700' : sub.status === 'PENDING_REVIEW' ? '' : 'bg-red-100 text-red-700'}>
+                            {sub.status.replace(/_/g, ' ')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs">{sub.processed_at ? formatDateSafe(sub.processed_at, true) : 'N/A'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
         </Card>
 
         <div className="grid md:grid-cols-2 gap-6"> 
-            <Card>
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><Briefcase className="h-5 w-5 text-primary"/> Membership & Dispensary</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                    <div>
-                        <span className="font-medium text-muted-foreground">Member Status:</span>
-                        <Badge variant={patient.member_status === 'VIP' ? 'default' : 'secondary'} className={`ml-2 ${patient.member_status === 'VIP' ? 'bg-primary/80 hover:bg-primary' : ''}`}>
-                            {patient.member_status}
-                        </Badge>
-                    </div>
-                    <div><span className="font-medium text-muted-foreground">Dispensary:</span> {patient.dispensary_name?.replace('Encanto Giving Tree LLC ', '')}</div>
-                    <div><span className="font-medium text-muted-foreground">Customer Since:</span> {formatDateSafe(patient.customer_since)}</div>
-                    {patient.member_since && <div><span className="font-medium text-muted-foreground">Member Since:</span> {formatDateSafe(patient.member_since)}</div>}
-                </CardContent>
-            </Card>
-            <Card>
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5 text-primary"/> Activity & Engagement</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                    <div><span className="font-medium text-muted-foreground">Number of Visits:</span> {patient.number_of_visits}</div>
-                    <div><span className="font-medium text-muted-foreground">Total Spent:</span> ${patient.spent_to_date?.toFixed(2)}</div>
-                    {patient.last_communication_date && (
-                        <>
-                        <div><span className="font-medium text-muted-foreground">Last Communication:</span> {formatDateSafe(patient.last_communication_date)}</div>
-                        <div><span className="font-medium text-muted-foreground">Communication Type:</span> <span className="capitalize">{patient.last_communication_type}</span></div>
-                        </>
-                    )}
-                    {patient.renewal_status && <div><span className="font-medium text-muted-foreground">Renewal Status:</span> <Badge variant="outline">{patient.renewal_status}</Badge></div>}
-                </CardContent>
-            </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Briefcase className="h-5 w-5 text-primary"/> Membership & Dispensary</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div>
+                <span className="font-medium text-muted-foreground">Member Status:</span>
+                <Badge variant={patient.member_status === 'VIP' ? 'default' : 'secondary'} className={`ml-2 ${patient.member_status === 'VIP' ? 'bg-primary/80 hover:bg-primary' : ''}`}>
+                  {patient.member_status}
+                </Badge>
+              </div>
+              <div><span className="font-medium text-muted-foreground">Dispensary:</span> {patient.dispensary_name?.replace('Encanto Giving Tree LLC ', '')}</div>
+              <div><span className="font-medium text-muted-foreground">Customer Since:</span> {formatDateSafe(patient.customer_since)}</div>
+              {patient.member_since && <div><span className="font-medium text-muted-foreground">Member Since:</span> {formatDateSafe(patient.member_since)}</div>}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><DollarSign className="h-5 w-5 text-primary"/> Activity & Engagement</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div><span className="font-medium text-muted-foreground">Number of Visits:</span> {patient.number_of_visits}</div>
+              <div><span className="font-medium text-muted-foreground">Total Spent:</span> ${patient.spent_to_date?.toFixed(2)}</div>
+              {patient.last_communication_date && (
+                <>
+                <div><span className="font-medium text-muted-foreground">Last Communication:</span> {formatDateSafe(patient.last_communication_date)}</div>
+                <div><span className="font-medium text-muted-foreground">Communication Type:</span> <span className="capitalize">{patient.last_communication_type}</span></div>
+                </>
+              )}
+              {patient.renewal_status && <div><span className="font-medium text-muted-foreground">Renewal Status:</span> <Badge variant="outline">{patient.renewal_status}</Badge></div>}
+            </CardContent>
+          </Card>
         </div>
 
         {/* Call Logs Card - Enhanced for License Renewal Workflow */}
