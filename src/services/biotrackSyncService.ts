@@ -100,24 +100,77 @@ export class BioTrackSyncService {
         }
       }
 
-      // Query incremental o completo
+      // Query incremental o completo - SOLO customers con redcard que comience en "PA"
       let query = `
         SELECT 
           customerid, lastname, firstname, middlename,
           birthmonth, birthday, birthyear,
           phone, fpassociated, stubid, address1, address2, 
           city, state, zip, ismember, email, cell,
-          licensenum, licenseexpmonth, licenseexpyear,
-          createdate, modified_on, deleted, location
+          redcard, licenseexpmonth, licenseexpyear,
+          createdate, deleted, location
         FROM customers
-        WHERE deleted = 0
+        WHERE deleted = 0 
+          AND redcard LIKE 'PA%'
       `;
-
-      if (lastSync && !fullSync) {
-        query += ` AND (modified_on > '${lastSync}' OR createdate > EXTRACT(EPOCH FROM TIMESTAMP '${lastSync}'))`;
+      
+      // Agregar campo de fecha de modificación si existe
+      try {
+        const checkModifiedQuery = `
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'customers' 
+            AND column_name = 'modified_on'
+            AND table_schema = 'public'
+        `;
+        const modifiedCheck = await this.biotrackClient.query(checkModifiedQuery);
+        if (modifiedCheck.rows.length > 0) {
+          query = query.replace('createdate, deleted, location', 'createdate, modified_on, deleted, location');
+        }
+      } catch (error) {
+        console.log(`Campo modified_on no disponible en ${this.databaseConfig.name}`);
       }
 
-      query += ` ORDER BY modified_on DESC LIMIT 1000`;
+      if (lastSync && !fullSync) {
+        // Verificar si modified_on está disponible
+        try {
+          const modifiedCheck = await this.biotrackClient.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'customers' 
+              AND column_name = 'modified_on'
+              AND table_schema = 'public'
+          `);
+          
+          if (modifiedCheck.rows.length > 0) {
+            query += ` AND (modified_on > '${lastSync}' OR createdate > EXTRACT(EPOCH FROM TIMESTAMP '${lastSync}'))`;
+          } else {
+            query += ` AND createdate > EXTRACT(EPOCH FROM TIMESTAMP '${lastSync}')`;
+          }
+        } catch (error) {
+          // Si no se puede verificar, usar solo createdate
+          query += ` AND createdate > EXTRACT(EPOCH FROM TIMESTAMP '${lastSync}')`;
+        }
+      }
+
+      // Agregar ORDER BY apropiado según campos disponibles
+      try {
+        const modifiedCheck = await this.biotrackClient.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name = 'customers' 
+            AND column_name = 'modified_on'
+            AND table_schema = 'public'
+        `);
+        
+        if (modifiedCheck.rows.length > 0) {
+          query += ` ORDER BY modified_on DESC LIMIT 1000`;
+        } else {
+          query += ` ORDER BY createdate DESC LIMIT 1000`;
+        }
+      } catch (error) {
+        query += ` ORDER BY createdate DESC LIMIT 1000`;
+      }
 
       console.log(`🔄 Sincronizando customers ${fullSync ? '(Full)' : '(Incremental)'}`);
       const biotrackData = await this.biotrackClient.query(query);
@@ -490,6 +543,10 @@ export class BioTrackSyncService {
   // MÉTODOS DE TRANSFORMACIÓN
   // ========================================
   private transformCustomerData(row: any): any {
+    // Obtener el nombre de ubicación mapeado usando la función helper
+    const { getLocationName } = require('@/lib/database-config');
+    const locationName = getLocationName(this.databaseConfig.id, row.location?.toString());
+    
     return {
       customerid: row.customerid,
       lastname: row.lastname,
@@ -509,13 +566,15 @@ export class BioTrackSyncService {
       ismember: row.ismember,
       email: row.email,
       cell: row.cell,
-      licensenum: row.licensenum,
+      redcard: row.redcard,
       licenseexpmonth: row.licenseexpmonth,
       licenseexpyear: row.licenseexpyear,
       createdate: row.createdate,
-      modified_on_bt: row.modified_on,
+      modified_on_bt: row.modified_on || null,
       deleted: row.deleted,
       location: row.location,
+      location_name: locationName, // Agregar el nombre mapeado de la ubicación
+      database_source: this.databaseConfig.name, // Agregar el nombre de la base de datos fuente
     };
   }
 

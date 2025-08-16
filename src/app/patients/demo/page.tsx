@@ -289,7 +289,7 @@ export default function DemoPatientPage() {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-6 px-6 py-8">
         <div>
           <Link href="/patients" legacyBehavior>
             <Button variant="outline" className="mb-4">

@@ -16,7 +16,7 @@ import { Users, Bell, KeyRound, FileText, ShieldCheck } from "lucide-react";
 export default function SettingsPage() {
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-6 px-6 py-8">
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">

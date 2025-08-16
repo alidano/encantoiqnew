@@ -8,13 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { dummyCallLogs } from "@/lib/dummy-data";
-import { mailwizzService, type Campaign } from '@/services/mailwizzService';
+import { mailwizzService, type MailWizzCampaign } from '@/services/mailwizzService';
 import { fetchAllCallLogs, type CallLog } from '@/services/patientService';
 import { ListFilter, Mail, Loader2, AlertTriangle, RefreshCw, Phone, ExternalLink, TrendingUp, Users, MousePointer, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from '@/hooks/useAuth';
 
-interface CampaignStats extends Campaign {
+interface CampaignStats {
+  campaign_uid: string;
+  campaign_id: string;
+  name: string;
+  type: string;
+  status: string;
+  subject?: string;
   delivered_count?: number;
   opened_count?: number;
   clicked_count?: number;
@@ -23,6 +29,8 @@ interface CampaignStats extends Campaign {
   open_rate?: number;
   click_rate?: number;
   bounce_rate?: number;
+  list_name?: string;
+  date_sent?: string | null;
 }
 
 export default function CommunicationsPage() {
@@ -71,7 +79,7 @@ export default function CommunicationsPage() {
     setCampaignError(null);
     
     try {
-      // Get campaigns with extended data
+      // Get campaigns with extended data - limit to 20 for processing but show only 5
       const campaignData = await mailwizzService.getAllCampaigns(1, 20);
       
       // Debug: Log the first campaign to see the actual structure
@@ -119,10 +127,13 @@ export default function CommunicationsPage() {
         return idB - idA;
       });
       
-      setCampaigns(campaignsWithStats);
-      console.log(`Loaded ${campaignsWithStats.length} campaigns for communications dashboard`);
+      // Limit to only the 5 most recent campaigns
+      const limitedCampaigns = campaignsWithStats.slice(0, 5);
       
-      if (campaignsWithStats.length === 0) {
+      setCampaigns(limitedCampaigns);
+      console.log(`Loaded ${limitedCampaigns.length} most recent campaigns (out of ${campaignsWithStats.length} total) for communications dashboard`);
+      
+      if (limitedCampaigns.length === 0) {
         setCampaignError("No campaigns found. Create and send campaigns in MailWizz to see them here.");
       }
     } catch (error) {
@@ -249,7 +260,7 @@ export default function CommunicationsPage() {
 
   return (
     <AppLayout>
-      <div className="space-y-6">
+      <div className="space-y-6 px-6 py-8">
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Communication Management</h1>
@@ -368,7 +379,7 @@ export default function CommunicationsPage() {
                       Email Marketing Campaigns
                     </CardTitle>
                     <CardDescription>
-                      Campaign performance and delivery statistics from MailWizz
+                      Showing the 5 most recent campaigns with performance statistics from MailWizz
                       {campaigns.length > 0 && (
                         <span className="text-green-600 font-medium"> • {campaigns.length} campaigns loaded</span>
                       )}
@@ -387,6 +398,14 @@ export default function CommunicationsPage() {
                   </Button>
                 </div>
             </div>
+            {campaigns.length > 0 && (
+              <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+                <p className="text-sm text-blue-700 dark:text-blue-300">
+                  💡 <strong>Note:</strong> This dashboard shows only the 5 most recent campaigns. 
+                  To view all campaigns or create new ones, use the MailWizz button above.
+                </p>
+              </div>
+            )}
           </CardHeader>
           <CardContent>
             {!isClientMounted || isLoadingCampaigns ? (
@@ -526,6 +545,21 @@ export default function CommunicationsPage() {
                     ))}
                   </TableBody>
                 </Table>
+                {campaigns.length > 0 && (
+                  <div className="mt-4 p-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-lg">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
+                      📊 Showing {campaigns.length} most recent campaigns • 
+                      <Button 
+                        variant="link" 
+                        size="sm" 
+                        className="p-0 h-auto text-blue-600 dark:text-blue-400 ml-1"
+                        onClick={() => window.open('https://inbi.bicomm.app', '_blank')}
+                      >
+                        View all campaigns in MailWizz
+                      </Button>
+                    </p>
+                  </div>
+                )}
              </div>
             ) : (
               <div className="text-center py-12">
